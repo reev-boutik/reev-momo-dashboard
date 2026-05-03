@@ -29,10 +29,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install
-        run: npm ci
+        run: npm install
 
       # Si tu préfères injecter URL/clé Supabase au build (au lieu de la
       # saisie manuelle dans l'UI), définis ces 2 secrets dans
