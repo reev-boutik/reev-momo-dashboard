@@ -6,8 +6,20 @@ import Today from "./pages/Today";
 import History from "./pages/History";
 import Charts from "./pages/Charts";
 import ByCashier from "./pages/ByCashier";
+import Install from "./pages/Install";
 
 export default function App() {
+  // La page d'install est publique : on la sert sans auth pour que les
+  // caisses puissent télécharger l'APK juste avec le QR code.
+  if (window.location.hash.startsWith("#/install")) {
+    return (
+      <Routes>
+        <Route path="/install" element={<Install />} />
+        <Route path="*" element={<Install />} />
+      </Routes>
+    );
+  }
+
   const creds = getCreds();
   const { session, loading } = useSession();
 
@@ -32,6 +44,7 @@ export default function App() {
           <Route path="/historique" element={<History />} />
           <Route path="/graphiques" element={<Charts />} />
           <Route path="/caisses" element={<ByCashier />} />
+          <Route path="/install" element={<Install />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -45,6 +58,7 @@ function Header({ email }: { email: string }) {
     { to: "/historique", label: "Historique" },
     { to: "/graphiques", label: "Graphiques" },
     { to: "/caisses", label: "Caisses" },
+    { to: "/install", label: "Installer l'app" },
   ];
 
   async function logout() {
