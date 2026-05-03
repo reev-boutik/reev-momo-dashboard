@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
+import ExportButton from "../components/ExportButton";
 import { fmtMoney } from "../lib/format";
 import { PROVIDER_DISPLAY, PROVIDER_COLOR } from "../lib/types";
 
@@ -55,11 +56,27 @@ export default function ByCashier() {
 
   return (
     <div className="p-6 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Par caisse</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Activité — {period.range.label}, regroupée par téléphone
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Par caisse</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Activité — {period.range.label}, regroupée par téléphone
+          </p>
+        </div>
+        <ExportButton
+          rows={stats}
+          cols={[
+            { key: "device_label", label: "Caisse" },
+            { key: "device_id", label: "ID téléphone" },
+            { key: "count", label: "Opérations" },
+            { key: "totalIn", label: "Reçu" },
+            { key: "totalOut", label: "Envoyé" },
+            { key: "lastSeen", label: "Dernière activité" },
+          ]}
+          filenamePrefix="caisses"
+          pdfTitle="Activité par caisse"
+          pdfSubtitle={period.range.label}
+        />
       </header>
 
       <PeriodFilter

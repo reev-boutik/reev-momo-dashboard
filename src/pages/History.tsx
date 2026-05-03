@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
+import ExportButton from "../components/ExportButton";
 import { fmtMoney, fmtFullDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
@@ -17,11 +18,21 @@ type SortKey =
   | "provider"
   | "type"
   | "amount"
+  | "fee"
+  | "total"
   | "balance"
   | "reference"
   | "counterparty";
 
 type SortDir = "asc" | "desc";
+
+/** Total signé d'une transaction = montant signé - frais */
+function rowTotal(r: AutoCapture): number | null {
+  if (r.amount == null) return null;
+  const sign = r.type === "OUTGOING" ? -1 : 1;
+  const fee = r.fee ?? 0;
+  return sign * r.amount - fee;
+}
 
 export default function History() {
   const period = usePeriod("today");
@@ -64,8 +75,15 @@ export default function History() {
 
     // Tri
     res = [...res].sort((a, b) => {
-      const va = (a as any)[sortKey];
-      const vb = (b as any)[sortKey];
+      let va: any;
+      let vb: any;
+      if (sortKey === "total") {
+        va = rowTotal(a);
+        vb = rowTotal(b);
+      } else {
+        va = (a as any)[sortKey];
+        vb = (b as any)[sortKey];
+      }
       // null en dernier
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
@@ -80,6 +98,20 @@ export default function History() {
     });
     return res;
   }, [data, provider, type, device, search, sortKey, sortDir]);
+
+  // Colonnes pour l'export universel (CSV/JSON/XLSX/PDF)
+  const EXPORT_COLS = [
+    { key: "sms_timestamp", label: "Date", transform: (v: string) => fmtFullDate(v) },
+    { key: "device_label", label: "Caisse" },
+    { key: "provider", label: "Opérateur", transform: (v: string) => PROVIDER_DISPLAY[v] ?? v },
+    { key: "type", label: "Type", transform: (v: string) => TYPE_DISPLAY[v] ?? v },
+    { key: "amount", label: "Montant" },
+    { key: "fee", label: "Frais" },
+    { key: "total", label: "Total", transform: (_v: any, r: AutoCapture) => rowTotal(r) },
+    { key: "balance", label: "Solde" },
+    { key: "reference", label: "Référence" },
+    { key: "counterparty", label: "Contrepartie" },
+  ];
 
   function toggleSort(k: SortKey) {
     if (sortKey === k) {
@@ -157,12 +189,13 @@ export default function History() {
               {deleting ? "Suppression…" : `Supprimer ${selected.size}`}
             </button>
           )}
-          <button
-            onClick={() => exportCsv(filtered)}
-            className="text-sm rounded-lg border border-slate-300 dark:border-slate-600 px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
-          >
-            Export CSV
-          </button>
+          <ExportButton
+            rows={filtered}
+            cols={EXPORT_COLS}
+            filenamePrefix="historique"
+            pdfTitle="Historique des transactions"
+            pdfSubtitle={`${filtered.length} transaction(s) — ${period.range.label}`}
+          />
         </div>
       </header>
 
@@ -232,6 +265,8 @@ export default function History() {
               <SortHeader k="provider" label="Opérateur" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               <SortHeader k="type" label="Type" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               <SortHeader k="amount" label="Montant" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortHeader k="fee" label="Frais" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortHeader k="total" label="Total" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               <SortHeader k="balance" label="Solde" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               <SortHeader k="reference" label="Référence" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               <SortHeader k="counterparty" label="Contrepartie" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
@@ -268,6 +303,17 @@ export default function History() {
                   }`}>
                     {r.amount != null ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}` : "—"}
                   </td>
+                  <td className="px-3 py-2 text-right font-mono text-amber-600 dark:text-amber-400">
+                    {r.fee && r.fee > 0 ? `−${fmtMoney(r.fee)}` : "—"}
+                  </td>
+                  <td className={`px-3 py-2 text-right font-mono font-semibold ${
+                    rowTotal(r) == null ? "" : (rowTotal(r)! >= 0 ? "text-emerald-600" : "text-rose-600")
+                  }`}>
+                    {(() => {
+                      const t = rowTotal(r);
+                      return t == null ? "—" : `${t >= 0 ? "+" : ""}${fmtMoney(t)}`;
+                    })()}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-400">
                     {fmtMoney(r.balance)}
                   </td>
@@ -282,7 +328,7 @@ export default function History() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-4 text-center text-slate-500">
+                <td colSpan={11} className="p-4 text-center text-slate-500">
                   Aucun résultat.
                 </td>
               </tr>
@@ -326,41 +372,4 @@ function SortHeader({
       {label} {arrow && <span className="text-brand-500">{arrow}</span>}
     </th>
   );
-}
-
-function exportCsv(rows: AutoCapture[]) {
-  const cols = [
-    "sms_timestamp",
-    "device_label",
-    "provider",
-    "type",
-    "amount",
-    "balance",
-    "fee",
-    "bonus",
-    "reference",
-    "counterparty",
-  ];
-  const lines = [cols.join(",")];
-  for (const r of rows) {
-    lines.push(
-      cols
-        .map((c) => {
-          const v = (r as any)[c];
-          if (v == null) return "";
-          const s = String(v).replace(/"/g, '""');
-          return s.includes(",") || s.includes('"') ? `"${s}"` : s;
-        })
-        .join(",")
-    );
-  }
-  const blob = new Blob(["\uFEFF" + lines.join("\n")], {
-    type: "text/csv;charset=utf-8",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `reev_momo_export_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
 }

@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
-import { fmtMoney, fmtTime, fmtDate } from "../lib/format";
+import ExportButton from "../components/ExportButton";
+import { fmtMoney, fmtTime, fmtDate, fmtFullDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
   PROVIDER_COLOR,
@@ -83,12 +84,32 @@ export default function Reconciliation() {
 
   return (
     <div className="p-6 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Réconciliation</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Chaînage des soldes — {period.range.label}.
-          Écart = solde calculé (précédent + montant − frais) − solde réel SMS.
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Réconciliation</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Chaînage des soldes — {period.range.label}.
+            Écart = solde calculé (précédent + montant − frais) − solde réel SMS.
+          </p>
+        </div>
+        <ExportButton
+          rows={filtered}
+          cols={[
+            { key: "sms_timestamp", label: "Date", transform: (v: string) => fmtFullDate(v) },
+            { key: "device_label", label: "Caisse" },
+            { key: "provider", label: "Opérateur", transform: (v: string) => PROVIDER_DISPLAY[v] ?? v },
+            { key: "type", label: "Type", transform: (v: string) => TYPE_DISPLAY[v] ?? v },
+            { key: "amount", label: "Montant" },
+            { key: "fee", label: "Frais" },
+            { key: "prevBalance", label: "Solde précédent" },
+            { key: "expectedBalance", label: "Solde calculé" },
+            { key: "balance", label: "Solde réel" },
+            { key: "delta", label: "Écart" },
+          ]}
+          filenamePrefix="reconciliation"
+          pdfTitle="Réconciliation des soldes"
+          pdfSubtitle={`${filtered.length} ligne(s) — ${period.range.label} — ${countWithDelta} écart(s) — total : ${fmtMoney(totalDelta)}`}
+        />
       </header>
 
       <PeriodFilter

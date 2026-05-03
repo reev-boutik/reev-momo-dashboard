@@ -14,6 +14,7 @@ import {
 import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
+import ExportButton from "../components/ExportButton";
 import { fmtMoney } from "../lib/format";
 import { PROVIDER_DISPLAY, PROVIDER_COLOR, type AutoCapture } from "../lib/types";
 
@@ -79,11 +80,28 @@ export default function Charts() {
 
   return (
     <div className="p-6 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Graphiques</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Volume reçu — {period.range.label}
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Graphiques</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Volume reçu — {period.range.label}
+          </p>
+        </div>
+        <ExportButton
+          rows={daily}
+          cols={[
+            { key: "date", label: "Date" },
+            { key: "ORANGE_MONEY", label: "Orange Money" },
+            { key: "MTN_MOMO", label: "MTN MoMo" },
+            { key: "MOOV_MONEY", label: "Moov Money" },
+            { key: "WAVE", label: "Wave" },
+            { key: "UNKNOWN", label: "Inconnu" },
+            { key: "total", label: "Total" },
+          ]}
+          filenamePrefix="graphique_volumes"
+          pdfTitle="Volumes reçus par jour"
+          pdfSubtitle={period.range.label}
+        />
       </header>
 
       <PeriodFilter

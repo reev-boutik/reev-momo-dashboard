@@ -7,6 +7,7 @@ import History from "./pages/History";
 import Charts from "./pages/Charts";
 import ByCashier from "./pages/ByCashier";
 import Reconciliation from "./pages/Reconciliation";
+import Reports from "./pages/Reports";
 import Install from "./pages/Install";
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/graphiques" element={<Charts />} />
           <Route path="/caisses" element={<ByCashier />} />
           <Route path="/reconciliation" element={<Reconciliation />} />
+          <Route path="/rapports" element={<Reports />} />
           <Route path="/install" element={<Install />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -61,6 +63,7 @@ function Header({ email }: { email: string }) {
     { to: "/graphiques", label: "Graphiques" },
     { to: "/caisses", label: "Caisses" },
     { to: "/reconciliation", label: "Réconciliation" },
+    { to: "/rapports", label: "Rapports" },
     { to: "/install", label: "Installer l'app" },
   ];
 
