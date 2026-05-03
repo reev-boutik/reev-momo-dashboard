@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { useCaptures } from "../hooks/useCaptures";
-import { fmtMoney, startOfTodayIso, fmtTime } from "../lib/format";
+import { usePeriod } from "../hooks/usePeriod";
+import PeriodFilter from "../components/PeriodFilter";
+import { fmtMoney, fmtTime } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
   PROVIDER_COLOR,
@@ -19,23 +21,21 @@ function computeStats(rows: AutoCapture[]): ProviderStat[] {
   const map = new Map<string, ProviderStat>();
   for (const r of rows) {
     if (r.amount == null) continue;
-    const s =
-      map.get(r.provider) ??
-      { provider: r.provider, in: 0, out: 0, count: 0 };
+    const s = map.get(r.provider) ?? { provider: r.provider, in: 0, out: 0, count: 0 };
     if (r.type === "INCOMING") s.in += r.amount;
     else if (r.type === "OUTGOING") s.out += r.amount;
     s.count += 1;
     map.set(r.provider, s);
   }
-  return Array.from(map.values()).sort(
-    (a, b) => b.in + b.out - (a.in + a.out)
-  );
+  return Array.from(map.values()).sort((a, b) => b.in + b.out - (a.in + a.out));
 }
 
 export default function Today() {
+  const period = usePeriod("today");
   const { data, loading, error } = useCaptures({
-    since: startOfTodayIso(),
-    limit: 500,
+    since: period.range.since,
+    until: period.range.until,
+    limit: 5000,
   });
 
   const stats = useMemo(() => computeStats(data), [data]);
@@ -43,21 +43,25 @@ export default function Today() {
   const totalOut = stats.reduce((s, p) => s + p.out, 0);
 
   if (loading) return <div className="p-6 text-slate-500">Chargement…</div>;
-  if (error)
-    return (
-      <div className="p-6 text-red-600">
-        Erreur : {error}
-      </div>
-    );
+  if (error) return <div className="p-6 text-red-600">Erreur : {error}</div>;
 
   return (
     <div className="p-6 space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">Aujourd'hui</h1>
+        <h1 className="text-2xl font-semibold">{period.range.label}</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
           Mise à jour en temps réel — {data.length} transaction(s)
         </p>
       </header>
+
+      <PeriodFilter
+        value={period.key}
+        onChange={period.setKey}
+        customSince={period.customSince}
+        customUntil={period.customUntil}
+        onCustomSince={period.setCustomSince}
+        onCustomUntil={period.setCustomUntil}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard title="Reçu (toutes caisses)" value={fmtMoney(totalIn)} accent="text-emerald-500" />
@@ -74,13 +78,8 @@ export default function Today() {
               className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800"
             >
               <div className="flex items-center gap-2 mb-2">
-                <span
-                  className="inline-block w-3 h-3 rounded-full"
-                  style={{ background: PROVIDER_COLOR[s.provider] ?? "#888" }}
-                />
-                <span className="font-medium">
-                  {PROVIDER_DISPLAY[s.provider] ?? s.provider}
-                </span>
+                <span className="inline-block w-3 h-3 rounded-full" style={{ background: PROVIDER_COLOR[s.provider] ?? "#888" }} />
+                <span className="font-medium">{PROVIDER_DISPLAY[s.provider] ?? s.provider}</span>
               </div>
               <div className="text-sm text-slate-600 dark:text-slate-300 space-y-1">
                 <div>↘ Reçu : {fmtMoney(s.in)}</div>
@@ -89,9 +88,7 @@ export default function Today() {
               </div>
             </div>
           ))}
-          {stats.length === 0 && (
-            <div className="text-sm text-slate-500">Aucune transaction aujourd'hui.</div>
-          )}
+          {stats.length === 0 && <div className="text-sm text-slate-500">Aucune transaction sur cette période.</div>}
         </div>
       </section>
 
@@ -100,43 +97,26 @@ export default function Today() {
         <ul className="divide-y divide-slate-200 dark:divide-slate-700 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
           {data.slice(0, 30).map((r) => (
             <li key={r.id} className="p-3 flex items-center gap-3">
-              <span
-                className="w-2 h-10 rounded-full flex-none"
-                style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }}
-              />
+              <span className="w-2 h-10 rounded-full flex-none" style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }} />
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-baseline gap-2">
                   <span className="font-medium truncate">
-                    {PROVIDER_DISPLAY[r.provider] ?? r.provider} —{" "}
-                    {TYPE_DISPLAY[r.type] ?? r.type}
+                    {PROVIDER_DISPLAY[r.provider] ?? r.provider} — {TYPE_DISPLAY[r.type] ?? r.type}
                   </span>
-                  <span className="text-xs text-slate-500 flex-none">
-                    {fmtTime(r.sms_timestamp)}
-                  </span>
+                  <span className="text-xs text-slate-500 flex-none">{fmtTime(r.sms_timestamp)}</span>
                 </div>
                 <div className="text-sm text-slate-600 dark:text-slate-300 flex justify-between gap-2">
-                  <span className="truncate">
-                    {r.counterparty ?? r.reference ?? r.device_label}
-                  </span>
-                  <span
-                    className={`font-mono flex-none ${
-                      r.type === "INCOMING"
-                        ? "text-emerald-500"
-                        : r.type === "OUTGOING"
-                        ? "text-rose-500"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    {r.type === "OUTGOING" ? "−" : "+"}
-                    {fmtMoney(r.amount)}
+                  <span className="truncate">{r.counterparty ?? r.reference ?? r.device_label}</span>
+                  <span className={`font-mono flex-none ${
+                    r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : "text-slate-500"
+                  }`}>
+                    {r.type === "OUTGOING" ? "−" : "+"}{fmtMoney(r.amount)}
                   </span>
                 </div>
               </div>
             </li>
           ))}
-          {data.length === 0 && (
-            <li className="p-4 text-sm text-slate-500">Aucune opération.</li>
-          )}
+          {data.length === 0 && <li className="p-4 text-sm text-slate-500">Aucune opération.</li>}
         </ul>
       </section>
     </div>

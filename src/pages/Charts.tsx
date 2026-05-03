@@ -12,8 +12,10 @@ import {
   Line,
 } from "recharts";
 import { useCaptures } from "../hooks/useCaptures";
+import { usePeriod } from "../hooks/usePeriod";
+import PeriodFilter from "../components/PeriodFilter";
 import { fmtMoney } from "../lib/format";
-import { PROVIDER_DISPLAY, PROVIDER_COLOR } from "../lib/types";
+import { PROVIDER_DISPLAY, PROVIDER_COLOR, type AutoCapture } from "../lib/types";
 
 interface DailyPoint {
   date: string;
@@ -25,11 +27,16 @@ interface DailyPoint {
   total: number;
 }
 
-function dailyAggregate(rows: any[], days = 14): DailyPoint[] {
+function dailyAggregate(rows: AutoCapture[], since: string | null): DailyPoint[] {
+  // Détermine la plage de jours à afficher
+  const start = since ? new Date(since) : null;
+  const end = new Date();
+  // Si pas de since, on affiche les 14 derniers jours par défaut
+  const startDate = start ?? new Date(end.getFullYear(), end.getMonth(), end.getDate() - 13);
+  startDate.setHours(0, 0, 0, 0);
+
   const buckets = new Map<string, DailyPoint>();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
+  for (let d = new Date(startDate); d <= end; d.setDate(d.getDate() + 1)) {
     const key = d.toISOString().slice(0, 10);
     buckets.set(key, {
       date: key,
@@ -53,29 +60,40 @@ function dailyAggregate(rows: any[], days = 14): DailyPoint[] {
 }
 
 export default function Charts() {
-  const since = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 14);
-    d.setHours(0, 0, 0, 0);
-    return d.toISOString();
-  }, []);
+  const period = usePeriod("month");
+  const { data, loading, error } = useCaptures({
+    since: period.range.since,
+    until: period.range.until,
+    limit: 10000,
+  });
 
-  const { data, loading, error } = useCaptures({ since, limit: 5000 });
-  const daily = useMemo(() => dailyAggregate(data, 14), [data]);
+  const daily = useMemo(
+    () => dailyAggregate(data, period.range.since),
+    [data, period.range.since]
+  );
 
   if (loading) return <div className="p-6 text-slate-500">Chargement…</div>;
   if (error) return <div className="p-6 text-red-600">Erreur : {error}</div>;
 
-  const formatShort = (d: string) => d.slice(5); // MM-DD
+  const formatShort = (d: string) => d.slice(5);
 
   return (
     <div className="p-6 space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">Graphiques</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Volume reçu par jour, sur les 14 derniers jours
+          Volume reçu — {period.range.label}
         </p>
       </header>
+
+      <PeriodFilter
+        value={period.key}
+        onChange={period.setKey}
+        customSince={period.customSince}
+        customUntil={period.customUntil}
+        onCustomSince={period.setCustomSince}
+        onCustomUntil={period.setCustomUntil}
+      />
 
       <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4">
         <h2 className="text-sm uppercase tracking-wide text-slate-500 mb-3">
@@ -89,30 +107,10 @@ export default function Charts() {
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} />
               <Tooltip formatter={(v: number) => fmtMoney(v)} />
               <Legend />
-              <Bar
-                dataKey="ORANGE_MONEY"
-                name={PROVIDER_DISPLAY.ORANGE_MONEY}
-                stackId="a"
-                fill={PROVIDER_COLOR.ORANGE_MONEY}
-              />
-              <Bar
-                dataKey="MTN_MOMO"
-                name={PROVIDER_DISPLAY.MTN_MOMO}
-                stackId="a"
-                fill={PROVIDER_COLOR.MTN_MOMO}
-              />
-              <Bar
-                dataKey="MOOV_MONEY"
-                name={PROVIDER_DISPLAY.MOOV_MONEY}
-                stackId="a"
-                fill={PROVIDER_COLOR.MOOV_MONEY}
-              />
-              <Bar
-                dataKey="WAVE"
-                name={PROVIDER_DISPLAY.WAVE}
-                stackId="a"
-                fill={PROVIDER_COLOR.WAVE}
-              />
+              <Bar dataKey="ORANGE_MONEY" name={PROVIDER_DISPLAY.ORANGE_MONEY} stackId="a" fill={PROVIDER_COLOR.ORANGE_MONEY} />
+              <Bar dataKey="MTN_MOMO" name={PROVIDER_DISPLAY.MTN_MOMO} stackId="a" fill={PROVIDER_COLOR.MTN_MOMO} />
+              <Bar dataKey="MOOV_MONEY" name={PROVIDER_DISPLAY.MOOV_MONEY} stackId="a" fill={PROVIDER_COLOR.MOOV_MONEY} />
+              <Bar dataKey="WAVE" name={PROVIDER_DISPLAY.WAVE} stackId="a" fill={PROVIDER_COLOR.WAVE} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -127,13 +125,7 @@ export default function Charts() {
               <XAxis dataKey="date" tickFormatter={formatShort} fontSize={11} />
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} />
               <Tooltip formatter={(v: number) => fmtMoney(v)} />
-              <Line
-                type="monotone"
-                dataKey="total"
-                stroke="#1976D2"
-                strokeWidth={2}
-                dot={false}
-              />
+              <Line type="monotone" dataKey="total" stroke="#1976D2" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

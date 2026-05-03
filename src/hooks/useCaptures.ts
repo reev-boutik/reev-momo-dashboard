@@ -4,7 +4,9 @@ import type { AutoCapture } from "../lib/types";
 
 interface Options {
   /** ISO date — ne ramène que les captures à partir de cette date */
-  since?: string;
+  since?: string | null;
+  /** ISO date — borne haute (utile pour "perso") */
+  until?: string | null;
   /** Limite (par défaut 1000) */
   limit?: number;
   /** Filtre device */
@@ -19,7 +21,7 @@ interface Options {
  * quand une nouvelle transaction arrive d'un téléphone.
  */
 export function useCaptures(opts: Options = {}) {
-  const { since, limit = 1000, deviceId, realtime = true } = opts;
+  const { since, until, limit = 1000, deviceId, realtime = true } = opts;
   const [data, setData] = useState<AutoCapture[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +45,7 @@ export function useCaptures(opts: Options = {}) {
         .order("sms_timestamp", { ascending: false })
         .limit(limit);
       if (since) q = q.gte("sms_timestamp", since);
+      if (until) q = q.lte("sms_timestamp", until);
       if (deviceId) q = q.eq("device_id", deviceId);
       const { data: rows, error: err } = await q;
       if (cancelled) return;
@@ -64,6 +67,7 @@ export function useCaptures(opts: Options = {}) {
           const row = payload.new as AutoCapture;
           // On respecte les filtres locaux si présents
           if (since && row.sms_timestamp < since) return;
+          if (until && row.sms_timestamp > until) return;
           if (deviceId && row.device_id !== deviceId) return;
           setData((prev) => [row, ...prev].slice(0, limit));
         }
@@ -74,7 +78,7 @@ export function useCaptures(opts: Options = {}) {
       cancelled = true;
       supa.removeChannel(channel);
     };
-  }, [since, limit, deviceId, realtime]);
+  }, [since, until, limit, deviceId, realtime]);
 
   return { data, loading, error };
 }

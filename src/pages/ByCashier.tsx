@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { useCaptures } from "../hooks/useCaptures";
-import { fmtMoney, startOfTodayIso } from "../lib/format";
+import { usePeriod } from "../hooks/usePeriod";
+import PeriodFilter from "../components/PeriodFilter";
+import { fmtMoney } from "../lib/format";
 import { PROVIDER_DISPLAY, PROVIDER_COLOR } from "../lib/types";
 
 interface DeviceStat {
@@ -14,22 +16,25 @@ interface DeviceStat {
 }
 
 export default function ByCashier() {
-  const { data, loading, error } = useCaptures({ since: startOfTodayIso(), limit: 5000 });
+  const period = usePeriod("today");
+  const { data, loading, error } = useCaptures({
+    since: period.range.since,
+    until: period.range.until,
+    limit: 5000,
+  });
 
   const stats = useMemo<DeviceStat[]>(() => {
     const map = new Map<string, DeviceStat>();
     for (const r of data) {
-      const s =
-        map.get(r.device_id) ??
-        {
-          device_id: r.device_id,
-          device_label: r.device_label || r.device_id,
-          count: 0,
-          totalIn: 0,
-          totalOut: 0,
-          byProvider: {},
-          lastSeen: r.sms_timestamp,
-        };
+      const s = map.get(r.device_id) ?? {
+        device_id: r.device_id,
+        device_label: r.device_label || r.device_id,
+        count: 0,
+        totalIn: 0,
+        totalOut: 0,
+        byProvider: {},
+        lastSeen: r.sms_timestamp,
+      };
       s.device_label = r.device_label || s.device_label;
       s.count += 1;
       if (r.amount != null) {
@@ -53,9 +58,18 @@ export default function ByCashier() {
       <header>
         <h1 className="text-2xl font-semibold">Par caisse</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Activité du jour, regroupée par téléphone (caisse)
+          Activité — {period.range.label}, regroupée par téléphone
         </p>
       </header>
+
+      <PeriodFilter
+        value={period.key}
+        onChange={period.setKey}
+        customSince={period.customSince}
+        customUntil={period.customUntil}
+        onCustomSince={period.setCustomSince}
+        onCustomUntil={period.setCustomUntil}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {stats.map((s) => (
@@ -85,15 +99,9 @@ export default function ByCashier() {
               {Object.entries(s.byProvider)
                 .sort((a, b) => b[1] - a[1])
                 .map(([p, v]) => (
-                  <div
-                    key={p}
-                    className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300"
-                  >
+                  <div key={p} className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
                     <span className="inline-flex items-center gap-1.5">
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ background: PROVIDER_COLOR[p] ?? "#888" }}
-                      />
+                      <span className="w-2 h-2 rounded-full" style={{ background: PROVIDER_COLOR[p] ?? "#888" }} />
                       {PROVIDER_DISPLAY[p] ?? p}
                     </span>
                     <span className="font-mono">{fmtMoney(v)}</span>
@@ -107,7 +115,7 @@ export default function ByCashier() {
           </div>
         ))}
         {stats.length === 0 && (
-          <div className="text-sm text-slate-500">Aucune caisse active aujourd'hui.</div>
+          <div className="text-sm text-slate-500">Aucune caisse active sur cette période.</div>
         )}
       </div>
     </div>

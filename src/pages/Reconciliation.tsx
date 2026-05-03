@@ -1,27 +1,14 @@
 import { useMemo, useState } from "react";
 import { useCaptures } from "../hooks/useCaptures";
-import { fmtMoney, fmtTime, fmtDate, startOfTodayIso } from "../lib/format";
+import { usePeriod } from "../hooks/usePeriod";
+import PeriodFilter from "../components/PeriodFilter";
+import { fmtMoney, fmtTime, fmtDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
   PROVIDER_COLOR,
   TYPE_DISPLAY,
   type AutoCapture,
 } from "../lib/types";
-
-/**
- * Vue Réconciliation : pour chaque (caisse, opérateur), trie les captures
- * par horodatage et affiche le chaînage des soldes avec :
- *   - solde précédent
- *   - signed amount (+ si INCOMING, - si OUTGOING)
- *   - solde théorique = précédent + signed
- *   - solde réel (extrait du SMS)
- *   - écart = théorique - réel
- *
- * Si écart != 0 → ligne en rouge avec le delta. Permet de détecter :
- *   - Notifications ratées (écart positif : argent reçu/envoyé hors capture)
- *   - Frais non parsés
- *   - Manipulations manuelles
- */
 
 interface ChainedRow extends AutoCapture {
   prevBalance: number | null;
@@ -30,12 +17,10 @@ interface ChainedRow extends AutoCapture {
 }
 
 function buildChain(rows: AutoCapture[]): ChainedRow[] {
-  // Tri ASC par sms_timestamp pour le chaînage
   const sorted = [...rows].sort((a, b) =>
     a.sms_timestamp.localeCompare(b.sms_timestamp)
   );
   const out: ChainedRow[] = [];
-  // Map (device_id|provider) -> last balance
   const lastBalance = new Map<string, number | null>();
 
   for (const r of sorted) {
@@ -47,29 +32,24 @@ function buildChain(rows: AutoCapture[]): ChainedRow[] {
       if (r.type === "INCOMING" || r.type === "BONUS") signed = r.amount;
       else if (r.type === "OUTGOING") signed = -r.amount;
     }
-    // Frais : toujours soustractifs
     const fee = r.fee ?? 0;
-    const expected =
-      prev != null && signed != null ? prev + signed - fee : null;
-    const delta =
-      expected != null && r.balance != null ? expected - r.balance : null;
+    const expected = prev != null && signed != null ? prev + signed - fee : null;
+    const delta = expected != null && r.balance != null ? expected - r.balance : null;
 
-    out.push({
-      ...r,
-      prevBalance: prev,
-      expectedBalance: expected,
-      delta,
-    });
+    out.push({ ...r, prevBalance: prev, expectedBalance: expected, delta });
 
     if (r.balance != null) lastBalance.set(key, r.balance);
   }
-  // On ré-affiche en DESC (plus récent en haut)
   return out.reverse();
 }
 
 export default function Reconciliation() {
-  const [since, setSince] = useState<string>(startOfTodayIso());
-  const { data, loading, error } = useCaptures({ since, limit: 5000 });
+  const period = usePeriod("today");
+  const { data, loading, error } = useCaptures({
+    since: period.range.since,
+    until: period.range.until,
+    limit: 5000,
+  });
   const [device, setDevice] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
   const [onlyDelta, setOnlyDelta] = useState<boolean>(false);
@@ -93,10 +73,7 @@ export default function Reconciliation() {
     [chained, device, provider, onlyDelta]
   );
 
-  const totalDelta = filtered.reduce(
-    (s, r) => (r.delta != null ? s + r.delta : s),
-    0
-  );
+  const totalDelta = filtered.reduce((s, r) => (r.delta != null ? s + r.delta : s), 0);
   const countWithDelta = filtered.filter(
     (r) => r.delta != null && Math.abs(r.delta) >= 0.5
   ).length;
@@ -109,77 +86,43 @@ export default function Reconciliation() {
       <header>
         <h1 className="text-2xl font-semibold">Réconciliation</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Chaînage des soldes pour détecter manquants/surplus.
+          Chaînage des soldes — {period.range.label}.
           Écart = solde calculé (précédent + montant − frais) − solde réel SMS.
         </p>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <select
-          value={since}
-          onChange={(e) => setSince(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
-        >
-          <option value={startOfTodayIso()}>Aujourd'hui</option>
-          <option value={daysAgoIso(7)}>7 derniers jours</option>
-          <option value={daysAgoIso(30)}>30 derniers jours</option>
-        </select>
-        <select
-          value={device}
-          onChange={(e) => setDevice(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
-        >
+      <PeriodFilter
+        value={period.key}
+        onChange={period.setKey}
+        customSince={period.customSince}
+        customUntil={period.customUntil}
+        onCustomSince={period.setCustomSince}
+        onCustomUntil={period.setCustomUntil}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <select value={device} onChange={(e) => setDevice(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
           <option value="">Toutes caisses</option>
-          {devices.map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
+          {devices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
-        >
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
           <option value="">Tous opérateurs</option>
-          {Object.entries(PROVIDER_DISPLAY).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
+          {Object.entries(PROVIDER_DISPLAY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-          <input
-            type="checkbox"
-            checked={onlyDelta}
-            onChange={(e) => setOnlyDelta(e.target.checked)}
-          />
+          <input type="checkbox" checked={onlyDelta} onChange={(e) => setOnlyDelta(e.target.checked)} />
           Uniquement les écarts
         </label>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <KpiCard
-          title="Lignes affichées"
-          value={filtered.length.toString()}
-          accent="text-slate-700 dark:text-slate-200"
-        />
-        <KpiCard
-          title="Avec écart"
-          value={countWithDelta.toString()}
-          accent={countWithDelta > 0 ? "text-amber-500" : "text-emerald-500"}
-        />
-        <KpiCard
-          title="Somme des écarts"
-          value={fmtMoney(totalDelta)}
-          accent={
-            Math.abs(totalDelta) < 0.5
-              ? "text-emerald-500"
-              : totalDelta > 0
-              ? "text-amber-500"
-              : "text-rose-500"
-          }
-        />
+        <KpiCard title="Lignes affichées" value={filtered.length.toString()} accent="text-slate-700 dark:text-slate-200" />
+        <KpiCard title="Avec écart" value={countWithDelta.toString()}
+          accent={countWithDelta > 0 ? "text-amber-500" : "text-emerald-500"} />
+        <KpiCard title="Somme des écarts" value={fmtMoney(totalDelta)}
+          accent={Math.abs(totalDelta) < 0.5 ? "text-emerald-500" : totalDelta > 0 ? "text-amber-500" : "text-rose-500"} />
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
@@ -202,113 +145,54 @@ export default function Reconciliation() {
             {filtered.slice(0, 500).map((r) => {
               const hasDelta = r.delta != null && Math.abs(r.delta) >= 0.5;
               return (
-                <tr
-                  key={r.id}
-                  className={
-                    hasDelta
-                      ? "bg-rose-50 dark:bg-rose-900/20"
-                      : ""
-                  }
-                >
+                <tr key={r.id} className={hasDelta ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">
                     {fmtDate(r.sms_timestamp)} {fmtTime(r.sms_timestamp)}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{r.device_label}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="inline-flex items-center gap-1.5">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full"
-                        style={{
-                          background: PROVIDER_COLOR[r.provider] ?? "#888",
-                        }}
-                      />
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }} />
                       {PROVIDER_DISPLAY[r.provider] ?? r.provider}
                     </span>
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {TYPE_DISPLAY[r.type] ?? r.type}
-                  </td>
-                  <td
-                    className={`px-3 py-2 text-right font-mono ${
-                      r.type === "INCOMING"
-                        ? "text-emerald-500"
-                        : r.type === "OUTGOING"
-                        ? "text-rose-500"
-                        : ""
-                    }`}
-                  >
-                    {r.amount != null
-                      ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}`
-                      : "—"}
+                  <td className="px-3 py-2 whitespace-nowrap">{TYPE_DISPLAY[r.type] ?? r.type}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${
+                    r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : ""
+                  }`}>
+                    {r.amount != null ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}` : "—"}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
                     {r.fee && r.fee > 0 ? `−${fmtMoney(r.fee)}` : "—"}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-500">
-                    {fmtMoney(r.prevBalance)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
-                    {fmtMoney(r.expectedBalance)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
-                    {fmtMoney(r.balance)}
-                  </td>
-                  <td
-                    className={`px-3 py-2 text-right font-mono ${
-                      hasDelta
-                        ? r.delta! > 0
-                          ? "text-amber-600 dark:text-amber-400 font-semibold"
-                          : "text-rose-600 dark:text-rose-400 font-semibold"
-                        : "text-slate-400"
-                    }`}
-                  >
-                    {r.delta != null
-                      ? `${r.delta > 0 ? "+" : ""}${fmtMoney(r.delta)}`
-                      : "—"}
+                  <td className="px-3 py-2 text-right font-mono text-slate-500">{fmtMoney(r.prevBalance)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">{fmtMoney(r.expectedBalance)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">{fmtMoney(r.balance)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${
+                    hasDelta ? (r.delta! > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-rose-600 dark:text-rose-400 font-semibold") : "text-slate-400"
+                  }`}>
+                    {r.delta != null ? `${r.delta > 0 ? "+" : ""}${fmtMoney(r.delta)}` : "—"}
                   </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
-              <tr>
-                <td colSpan={10} className="p-4 text-center text-slate-500">
-                  Aucune ligne.
-                </td>
-              </tr>
+              <tr><td colSpan={10} className="p-4 text-center text-slate-500">Aucune ligne.</td></tr>
             )}
           </tbody>
         </table>
         {filtered.length > 500 && (
-          <div className="p-2 text-xs text-slate-500 text-center">
-            500 premières lignes affichées.
-          </div>
+          <div className="p-2 text-xs text-slate-500 text-center">500 premières lignes affichées.</div>
         )}
       </div>
     </div>
   );
 }
 
-function daysAgoIso(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString();
-}
-
-function KpiCard({
-  title,
-  value,
-  accent,
-}: {
-  title: string;
-  value: string;
-  accent: string;
-}) {
+function KpiCard({ title, value, accent }: { title: string; value: string; accent: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800">
-      <div className="text-xs uppercase tracking-wide text-slate-500">
-        {title}
-      </div>
+      <div className="text-xs uppercase tracking-wide text-slate-500">{title}</div>
       <div className={`text-2xl font-semibold mt-1 ${accent}`}>{value}</div>
     </div>
   );
