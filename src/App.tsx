@@ -10,6 +10,7 @@ import Reconciliation from "./pages/Reconciliation";
 import Reports from "./pages/Reports";
 import AllSms from "./pages/AllSms";
 import Install from "./pages/Install";
+import BalanceBar from "./components/BalanceBar";
 
 export default function App() {
   // La page d'install est publique : on la sert sans auth pour que les
@@ -41,6 +42,9 @@ export default function App() {
   return (
     <div className="min-h-full flex flex-col">
       <Header email={session.user.email ?? ""} />
+      <div className="sticky top-[57px] z-[5] bg-slate-50 dark:bg-slate-900 px-6 pt-4 pb-2">
+        <BalanceBar />
+      </div>
       <main className="flex-1">
         <Routes>
           <Route path="/" element={<Today />} />
@@ -60,7 +64,7 @@ export default function App() {
 
 function Header({ email }: { email: string }) {
   const tabs = [
-    { to: "/", label: "Aujourd'hui", end: true },
+    { to: "/", label: "Accueil", end: true },
     { to: "/historique", label: "Historique" },
     { to: "/graphiques", label: "Graphiques" },
     { to: "/caisses", label: "Caisses" },

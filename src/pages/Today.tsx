@@ -3,7 +3,6 @@ import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
 import ExportButton from "../components/ExportButton";
-import BalanceBar from "../components/BalanceBar";
 import { fmtMoney, fmtTime, fmtFullDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
@@ -33,7 +32,7 @@ function computeStats(rows: AutoCapture[]): ProviderStat[] {
 }
 
 export default function Today() {
-  const period = usePeriod("today");
+  const period = usePeriod("day");
   const { data, loading, error } = useCaptures({
     since: period.range.since,
     until: period.range.until,
@@ -62,8 +61,6 @@ export default function Today() {
 
   return (
     <div className="p-6 space-y-6">
-      <BalanceBar />
-
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{period.range.label}</h1>
@@ -93,6 +90,8 @@ export default function Today() {
       <PeriodFilter
         value={period.key}
         onChange={period.setKey}
+        count={period.count}
+        onCountChange={period.setCount}
         customSince={period.customSince}
         customUntil={period.customUntil}
         onCustomSince={period.setCustomSince}

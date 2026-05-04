@@ -45,7 +45,7 @@ function buildChain(rows: AutoCapture[]): ChainedRow[] {
 }
 
 export default function Reconciliation() {
-  const period = usePeriod("today");
+  const period = usePeriod("day");
   const { data, loading, error } = useCaptures({
     since: period.range.since,
     until: period.range.until,
@@ -115,6 +115,8 @@ export default function Reconciliation() {
       <PeriodFilter
         value={period.key}
         onChange={period.setKey}
+        count={period.count}
+        onCountChange={period.setCount}
         customSince={period.customSince}
         customUntil={period.customUntil}
         onCustomSince={period.setCustomSince}

@@ -107,6 +107,8 @@ export default function Charts() {
       <PeriodFilter
         value={period.key}
         onChange={period.setKey}
+        count={period.count}
+        onCountChange={period.setCount}
         customSince={period.customSince}
         customUntil={period.customUntil}
         onCustomSince={period.setCustomSince}

@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 
-export type PeriodKey = "today" | "week" | "month" | "year" | "all" | "custom";
+export type PeriodUnit = "day" | "week" | "month" | "year";
+export type PeriodKey = PeriodUnit | "all" | "custom";
 
 export interface PeriodRange {
   key: PeriodKey;
-  since: string | null; // ISO ou null pour "all"
+  since: string | null;
   until: string | null;
   label: string;
+  /** Nombre d'unités, utile pour "10 derniers jours" */
+  count?: number;
 }
 
 function startOf(d: Date): Date {
@@ -20,63 +23,89 @@ function isoOrNull(d: Date | null): string | null {
 }
 
 /**
- * Calcule la borne basse (since) et haute (until) en fonction du choix.
- * - today  : 00:00 aujourd'hui jusqu'à maintenant
- * - week   : 00:00 lundi de cette semaine jusqu'à maintenant
- * - month  : 1er du mois courant 00:00 jusqu'à maintenant
- * - year   : 1er janvier de l'année courante 00:00 jusqu'à maintenant
- * - all    : pas de borne
- * - custom : valeurs explicites
+ * Calcule la borne basse (since) en fonction du choix.
+ * - day(N)   : commence il y a N jours (00:00) — par défaut N=1 = aujourd'hui
+ * - week(N)  : commence il y a N semaines (lundi 00:00) — par défaut N=1 = cette semaine
+ * - month(N) : commence il y a N mois (1er du mois 00:00) — par défaut N=1 = ce mois
+ * - year(N)  : commence il y a N années (1er janv 00:00) — par défaut N=1 = cette année
+ * - all      : pas de borne basse
+ * - custom   : valeurs explicites
+ *
+ * Pas de borne haute : on prend toujours jusqu'à maintenant.
  */
-export function buildRange(key: PeriodKey, customSince?: string, customUntil?: string): PeriodRange {
+export function buildRange(
+  key: PeriodKey,
+  count: number = 1,
+  customSince?: string,
+  customUntil?: string
+): PeriodRange {
   const now = new Date();
-  switch (key) {
-    case "today": {
-      const s = startOf(now);
-      return { key, since: isoOrNull(s), until: null, label: "Aujourd'hui" };
-    }
-    case "week": {
-      const s = startOf(now);
-      // Lundi = jour 1, dimanche = jour 0 → décale pour avoir lundi
-      const dow = s.getDay();
-      const offset = dow === 0 ? 6 : dow - 1;
-      s.setDate(s.getDate() - offset);
-      return { key, since: isoOrNull(s), until: null, label: "Cette semaine" };
-    }
-    case "month": {
-      const s = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { key, since: isoOrNull(s), until: null, label: "Ce mois" };
-    }
-    case "year": {
-      const s = new Date(now.getFullYear(), 0, 1);
-      return { key, since: isoOrNull(s), until: null, label: "Cette année" };
-    }
-    case "custom":
-      return {
-        key,
-        since: customSince ?? null,
-        until: customUntil ?? null,
-        label: "Personnalisé",
-      };
-    case "all":
-    default:
-      return { key: "all", since: null, until: null, label: "Tout" };
+  const n = Math.max(1, count);
+
+  if (key === "all") {
+    return { key: "all", since: null, until: null, label: "Tout" };
   }
+
+  if (key === "custom") {
+    return {
+      key,
+      since: customSince ?? null,
+      until: customUntil ?? null,
+      label: "Personnalisé",
+    };
+  }
+
+  if (key === "day") {
+    const s = startOf(now);
+    s.setDate(s.getDate() - (n - 1));
+    const label = n === 1 ? "Aujourd'hui" : `${n} derniers jours`;
+    return { key, count: n, since: isoOrNull(s), until: null, label };
+  }
+
+  if (key === "week") {
+    const s = startOf(now);
+    const dow = s.getDay();
+    const offset = dow === 0 ? 6 : dow - 1; // lundi
+    s.setDate(s.getDate() - offset - (n - 1) * 7);
+    const label = n === 1 ? "Cette semaine" : `${n} dernières semaines`;
+    return { key, count: n, since: isoOrNull(s), until: null, label };
+  }
+
+  if (key === "month") {
+    const s = new Date(now.getFullYear(), now.getMonth() - (n - 1), 1);
+    const label = n === 1 ? "Ce mois" : `${n} derniers mois`;
+    return { key, count: n, since: isoOrNull(s), until: null, label };
+  }
+
+  if (key === "year") {
+    const s = new Date(now.getFullYear() - (n - 1), 0, 1);
+    const label = n === 1 ? "Cette année" : `${n} dernières années`;
+    return { key, count: n, since: isoOrNull(s), until: null, label };
+  }
+
+  return { key: "all", since: null, until: null, label: "Tout" };
 }
 
-export function usePeriod(initial: PeriodKey = "today") {
-  const [key, setKey] = useState<PeriodKey>(initial);
+export function usePeriod(initialKey: PeriodKey = "day", initialCount: number = 1) {
+  const [key, setKey] = useState<PeriodKey>(initialKey);
+  const [count, setCount] = useState<number>(initialCount);
   const [customSince, setCustomSince] = useState<string>("");
   const [customUntil, setCustomUntil] = useState<string>("");
 
   const range = useMemo(
-    () => buildRange(key, customSince || undefined, customUntil || undefined),
-    [key, customSince, customUntil]
+    () => buildRange(key, count, customSince || undefined, customUntil || undefined),
+    [key, count, customSince, customUntil]
   );
 
   return {
     key,
-    setKey,
+    setKey: (k: PeriodKey) => {
+      setKey(k);
+      // Reset count à 1 quand on change de preset (sauf si on reste sur le même)
+      if (k !== key) setCount(1);
+    },
+    count,
+    setCount,
     range,
     customSince,
     setCustomSince,
