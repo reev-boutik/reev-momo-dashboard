@@ -3,6 +3,7 @@ import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
 import ExportButton from "../components/ExportButton";
+import BalanceBar from "../components/BalanceBar";
 import { fmtMoney, fmtTime, fmtFullDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
@@ -38,16 +39,31 @@ export default function Today() {
     until: period.range.until,
     limit: 5000,
   });
+  // Toujours dispo : les 20 dernières transactions, indépendamment de la période.
+  // Affichées en fallback quand la période courante est vide.
+  const { data: recent } = useCaptures({
+    since: null,
+    until: null,
+    limit: 20,
+    realtime: false,
+  });
 
   const stats = useMemo(() => computeStats(data), [data]);
   const totalIn = stats.reduce((s, p) => s + p.in, 0);
   const totalOut = stats.reduce((s, p) => s + p.out, 0);
+
+  // Liste à afficher dans "Dernières opérations" : si la période a des données,
+  // on prend les 30 premières ; sinon, on retombe sur les 20 dernières globales.
+  const displayedOps = data.length > 0 ? data.slice(0, 30) : recent;
+  const displayedOpsEmpty = data.length === 0 && recent.length === 0;
 
   if (loading) return <div className="p-6 text-slate-500">Chargement…</div>;
   if (error) return <div className="p-6 text-red-600">Erreur : {error}</div>;
 
   return (
     <div className="p-6 space-y-6">
+      <BalanceBar />
+
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{period.range.label}</h1>
@@ -113,9 +129,11 @@ export default function Today() {
       </section>
 
       <section>
-        <h2 className="text-lg font-medium mb-3">Dernières opérations</h2>
+        <h2 className="text-lg font-medium mb-3">
+          {data.length > 0 ? "Dernières opérations" : "Dernières opérations (toutes périodes)"}
+        </h2>
         <ul className="divide-y divide-slate-200 dark:divide-slate-700 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
-          {data.slice(0, 30).map((r) => (
+          {displayedOps.map((r) => (
             <li key={r.id} className="p-3 flex items-center gap-3">
               <span className="w-2 h-10 rounded-full flex-none" style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }} />
               <div className="flex-1 min-w-0">
@@ -136,7 +154,7 @@ export default function Today() {
               </div>
             </li>
           ))}
-          {data.length === 0 && <li className="p-4 text-sm text-slate-500">Aucune opération.</li>}
+          {displayedOpsEmpty && <li className="p-4 text-sm text-slate-500">Aucune opération.</li>}
         </ul>
       </section>
     </div>
