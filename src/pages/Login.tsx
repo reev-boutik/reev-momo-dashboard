@@ -37,7 +37,19 @@ export default function Login() {
 
     setBusy(false);
     if (error) {
-      setMsg(error.message);
+      // Message plus clair selon le type d'erreur
+      const m = error.message.toLowerCase();
+      if (m.includes("invalid login")) {
+        setMsg(
+          "Email ou mot de passe incorrect. Si tu viens de créer le compte et que Supabase exige la confirmation par email, va valider l'email d'abord (ou désactive 'Confirm email' dans Supabase → Authentication → Providers → Email)."
+        );
+      } else if (m.includes("email not confirmed")) {
+        setMsg(
+          "Email pas encore confirmé. Va dans Supabase → Authentication → Users, clique sur ton compte, et marque l'email comme confirmé. Ou désactive 'Confirm email' dans les providers."
+        );
+      } else {
+        setMsg(error.message);
+      }
     } else if (mode === "signup") {
       setMsg(
         "Compte créé. Si Supabase exige la confirmation email, va valider dans ta boîte. Sinon connecte-toi."

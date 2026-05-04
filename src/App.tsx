@@ -70,6 +70,9 @@ function Header({ email }: { email: string }) {
   async function logout() {
     const supa = getSupabase();
     if (supa) await supa.auth.signOut();
+    // On ne supprime PAS les credentials Supabase (URL + clé anon).
+    // Seule la session utilisateur est effacée. Comme ça, à la reconnexion
+    // l'utilisateur tape juste son email + mot de passe.
   }
 
   function reconfigure() {
