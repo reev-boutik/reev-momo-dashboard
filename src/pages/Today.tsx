@@ -3,7 +3,6 @@ import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
 import ExportButton from "../components/ExportButton";
-import BalanceBar from "../components/BalanceBar";
 import { fmtMoney, fmtTime, fmtFullDate } from "../lib/format";
 import {
   PROVIDER_DISPLAY,
@@ -33,7 +32,7 @@ function computeStats(rows: AutoCapture[]): ProviderStat[] {
 }
 
 export default function Today() {
-  const period = usePeriod("today");
+  const period = usePeriod("day");
   const { data, loading, error } = useCaptures({
     since: period.range.since,
     until: period.range.until,
@@ -62,8 +61,6 @@ export default function Today() {
 
   return (
     <div className="p-6 space-y-6">
-      <BalanceBar />
-
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{period.range.label}</h1>
@@ -93,40 +90,45 @@ export default function Today() {
       <PeriodFilter
         value={period.key}
         onChange={period.setKey}
+        count={period.count}
+        onCountChange={period.setCount}
         customSince={period.customSince}
         customUntil={period.customUntil}
         onCustomSince={period.setCustomSince}
         onCustomUntil={period.setCustomUntil}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <KpiCard title="Reçu (toutes caisses)" value={fmtMoney(totalIn)} accent="text-emerald-500" />
-        <KpiCard title="Envoyé" value={fmtMoney(totalOut)} accent="text-rose-500" />
-        <KpiCard title="Net" value={fmtMoney(totalIn - totalOut)} accent="text-brand-500" />
-      </div>
-
-      <section>
-        <h2 className="text-lg font-medium mb-3">Par opérateur</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {stats.map((s) => (
-            <div
-              key={s.provider}
-              className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800"
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="inline-block w-3 h-3 rounded-full" style={{ background: PROVIDER_COLOR[s.provider] ?? "#888" }} />
-                <span className="font-medium">{PROVIDER_DISPLAY[s.provider] ?? s.provider}</span>
-              </div>
-              <div className="text-sm text-slate-600 dark:text-slate-300 space-y-1">
-                <div>↘ Reçu : {fmtMoney(s.in)}</div>
-                <div>↗ Envoyé : {fmtMoney(s.out)}</div>
-                <div className="text-xs text-slate-500">{s.count} opération(s)</div>
-              </div>
-            </div>
-          ))}
-          {stats.length === 0 && <div className="text-sm text-slate-500">Aucune transaction sur cette période.</div>}
+      {data.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <KpiCard title="Reçu (toutes caisses)" value={fmtMoney(totalIn)} accent="text-emerald-500" />
+          <KpiCard title="Envoyé" value={fmtMoney(totalOut)} accent="text-rose-500" />
+          <KpiCard title="Net" value={fmtMoney(totalIn - totalOut)} accent="text-brand-500" />
         </div>
-      </section>
+      )}
+
+      {stats.length > 0 && (
+        <section>
+          <h2 className="text-lg font-medium mb-3">Par opérateur</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {stats.map((s) => (
+              <div
+                key={s.provider}
+                className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: PROVIDER_COLOR[s.provider] ?? "#888" }} />
+                  <span className="font-medium">{PROVIDER_DISPLAY[s.provider] ?? s.provider}</span>
+                </div>
+                <div className="text-sm text-slate-600 dark:text-slate-300 space-y-1">
+                  <div>↘ Reçu : {fmtMoney(s.in)}</div>
+                  <div>↗ Envoyé : {fmtMoney(s.out)}</div>
+                  <div className="text-xs text-slate-500">{s.count} opération(s)</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="text-lg font-medium mb-3">
