@@ -41,7 +41,7 @@ export default function BalanceBar() {
           <div className="text-xs uppercase tracking-wider opacity-80">
             Solde total (toutes caisses, tous réseaux)
           </div>
-          <div className="text-3xl font-mono font-bold mt-1">{fmtMoney(total)}</div>
+          <div className="text-3xl font-mono font-bold mt-1">{fmtMoney(total)} F</div>
         </div>
         <div className="text-xs opacity-75">
           {data.length} compte(s) suivi(s)
