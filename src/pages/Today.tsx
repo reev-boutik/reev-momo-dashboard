@@ -146,7 +146,9 @@ export default function Today() {
                   <span className="text-xs text-slate-500 flex-none">{fmtTime(r.sms_timestamp)}</span>
                 </div>
                 <div className="text-sm text-slate-600 dark:text-slate-300 flex justify-between gap-2">
-                  <span className="truncate">{r.counterparty ?? r.reference ?? r.device_label}</span>
+                  <span className="truncate font-medium">
+                    {r.counterparty ? `📱 ${r.counterparty}` : (r.reference ?? r.device_label)}
+                  </span>
                   <span className={`font-mono flex-none ${
                     r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : "text-slate-500"
                   }`}>
