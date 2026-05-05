@@ -11,6 +11,7 @@ import Reconciliation from "./pages/Reconciliation";
 import Reports from "./pages/Reports";
 import AllSms from "./pages/AllSms";
 import Install from "./pages/Install";
+import ReparseAdmin from "./pages/ReparseAdmin";
 import BalanceBar from "./components/BalanceBar";
 
 export default function App() {
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/reconciliation" element={<Reconciliation />} />
           <Route path="/rapports" element={<Reports />} />
           <Route path="/sms" element={<AllSms />} />
+          <Route path="/admin/reparse" element={<ReparseAdmin />} />
           <Route path="/install" element={<Install />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -172,6 +174,13 @@ function Header({ email }: { email: string }) {
               >
                 Reconfigurer Supabase
               </button>
+              <a
+                href="#/admin/reparse"
+                onClick={() => setMenuOpen(false)}
+                className="block w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 border-t border-slate-200 dark:border-slate-700"
+              >
+                Re-analyser les transactions
+              </a>
             </div>
           )}
         </div>
