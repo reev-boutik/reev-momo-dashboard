@@ -101,46 +101,54 @@ function extractReference(text: string): string | null {
  * Extrait la contrepartie (nom + numéro de téléphone si possible).
  * Format de sortie privilégié : "Nom (07XXXXXXXX)" ou "Nom (07******66)".
  */
+function isValidName(raw: string): boolean {
+  if (raw.length < 3 || raw.length > 60) return false;
+  if (/^(FCFA|XOF|CFA|Ref|Réf|le|on|the|Payment|Successful|Transfer|Sent|You|Your|Votre)$/i.test(raw)) return false;
+  return /[a-zA-ZÀ-ÿ]/.test(raw);
+}
+
 function extractCounterparty(text: string): string | null {
-  // Format Wave Business : "received from Aboh Eunice (01******83)"
-  let m = text.match(
-    /(?:de|from|to|à|au|by)\s+([A-ZÀ-Ÿ][A-Za-zÀ-ÿ'\-\s]{1,40}?)\s*\(\s*([0-9*+\s]{4,20})\s*\)/i
+  // 1. Numéro masqué Wave Business : (05******97)
+  let phone: string | null = null;
+  let m = text.match(/\((\d{1,4}\*+\d{1,4})\)/);
+  if (m) phone = m[1];
+
+  // 2. Sinon numéro normal après mot-clé téléphonique
+  if (!phone) {
+    m = text.match(/(?:vers|au|to|from|de|tel|tél|num|numéro|numero|n°|phone)\s+(?:le\s+)?(\+?\d{8,15})/i);
+    if (m) phone = m[1];
+  }
+
+  let name: string | null = null;
+
+  // 3a. Nom avant parenthèses contenant numéro masqué
+  m = text.match(
+    /((?:[A-ZÀ-Ý][A-Za-zÀ-ÿ'\-]+|[A-ZÀ-Ý]{2,})(?:\s+(?:[A-ZÀ-Ý][A-Za-zÀ-ÿ'\-]+|[A-ZÀ-Ý]{1,}))*)\s*\(\s*\d{1,4}\*+\d{1,4}\s*\)/
   );
   if (m) {
-    const name = m[1].trim();
-    const phone = m[2].replace(/\s+/g, "");
-    return `${name} (${phone})`;
+    const raw = m[1].trim();
+    if (isValidName(raw)) name = raw;
   }
 
-  // Numéro plein dans le corps (style Orange : "vers le 0709455297")
-  const phoneMatch = text.match(/(?:vers|au|to|from|de)\s+(?:le\s+)?(\+?[0-9]{8,15})/i);
-  const rawPhone = phoneMatch ? phoneMatch[1] : null;
-
-  // Numéro masqué seul entre parenthèses
-  const maskedMatch = text.match(/\(([0-9*+\s]{4,20})\)/);
-  const maskedPhone = maskedMatch ? maskedMatch[1].replace(/\s+/g, "") : null;
-
-  // Nom seul (without phone in parens)
-  let nameOnly: string | null = null;
-  m = text.match(
-    /(?:de|from)\s+([A-ZÀ-Ÿ][A-Za-zÀ-ÿ'\-\s]{2,40}?)(?=[.,;]|\s+(?:le|on|nouveau|solde|ref|réf|pour|for)|\s+\d|\s*\(|\s*$)/i
-  );
-  if (m) nameOnly = m[1].trim();
-  if (!nameOnly) {
-    m = text.match(
-      /(?:à|au|to)\s+([A-ZÀ-Ÿ][A-Za-zÀ-ÿ'\-\s]{2,40}?)(?=[.,;]|\s+(?:le|on|nouveau|solde|ref|réf|effectué|completed|pour|for)|\s+\d|\s*\(|\s*$)/i
+  // 3b. Nom après mot-clé d'action
+  if (!name) {
+    const keywords = "(?:received\\s+from|paid\\s+you\\s+by|sent\\s+to|paid\\s+to|reçu\\s+de|recu\\s+de|from|to|de|à|au)";
+    const re = new RegExp(
+      `${keywords}\\s+((?:[A-ZÀ-Ý][A-Za-zÀ-ÿ'\\-]+|[A-ZÀ-Ý]{2,})(?:\\s+(?:[A-ZÀ-Ý][A-Za-zÀ-ÿ'\\-]+|[A-ZÀ-Ý]{1,}))*)`,
+      "i"
     );
-    if (m) nameOnly = m[1].trim();
+    m = text.match(re);
+    if (m) {
+      let raw = m[1].trim();
+      raw = raw.replace(/\s+(on|le|for|pour|sur|the|un|une|votre|your|nouveau|new|solde|balance)\b.*$/i, "").trim();
+      if (isValidName(raw)) name = raw;
+    }
   }
 
-  const numero = rawPhone || maskedPhone;
-  if (nameOnly && numero) return `${nameOnly} (${numero})`;
-  if (nameOnly) return nameOnly;
-  if (numero) return numero;
-
-  // Fallback : "numero: +225..." / "n°: ..."
-  m = text.match(/(?:numero|numéro|num|n°)\s*[:=]?\s*(\+?[0-9 ]{6,15})/i);
-  return m ? m[1].trim() : null;
+  if (name && phone) return `${name} (${phone})`;
+  if (name) return name;
+  if (phone) return phone;
+  return null;
 }
 
 /**
