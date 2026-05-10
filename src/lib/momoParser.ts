@@ -226,11 +226,25 @@ export function detectCategory(
     return "WAVE_MARCHAND";
   }
 
-  // 3. Sender 207 — Orange Cabine
+  // 3. Compte Pay (encaissement marchand) — détection par marqueur fort
+  // dans le corps. Doit passer AVANT les checks Cabine pour qu'un SMS
+  // Orange Pay (qui mentionne "transfert") ne soit pas mal classé.
+  //  - Orange Pay : "Reference PPyymmdd.HHMM.IDXXXXX" (préfixe PP).
+  //  - MTN MoMoPay : marqueur "momopay" (à confirmer avec samples).
+  //  - Moov Pay   : marqueurs à confirmer.
+  if (/\breference\s+pp\d/i.test(rawText ?? "")) return "PAY";
+  if (lower.includes("momopay")) return "PAY";
+  if (
+    lower.includes("encaissement marchand") ||
+    lower.includes("paiement marchand reçu") ||
+    lower.includes("paiement marchand recu")
+  ) return "PAY";
+
+  // 4. Sender 207 — Orange Cabine
   const senderNum = (title ?? "").replace(/[^0-9]/g, "");
   if (senderNum === "207") return "CABINE";
 
-  // 4. Mots-clés Cabine
+  // 5. Mots-clés Cabine
   const cabineKeywords = [
     "rechargement de", "rechargement pour", "rechargement à",
     "transfert d'unités", "transfert d'unites", "transfert unites", "transfert unités",
@@ -243,14 +257,14 @@ export function detectCategory(
   ];
   if (cabineKeywords.some(k => lower.includes(k))) return "CABINE";
 
-  // 4b. Patterns forfait Orange
+  // 5b. Patterns forfait Orange
   if (/mix\s*\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
   if (/\bpass\s+\w+(?:\s+\w+)?\s+\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
 
-  // 5. Wave Personal
+  // 6. Wave Personal
   if (isWaveProvider) return "WAVE_NORMAL";
 
-  // 6. Défaut
+  // 7. Défaut
   return "MONEY";
 }
 

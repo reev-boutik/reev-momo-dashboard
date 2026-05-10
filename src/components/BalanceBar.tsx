@@ -84,14 +84,13 @@ export default function BalanceBar() {
  */
 function accountLabel(provider: string, category: string): string {
   const baseLabel = PROVIDER_DISPLAY[provider] ?? provider;
-  if (category === "CABINE") {
-    const short =
-      provider === "ORANGE_MONEY" ? "Orange" :
-      provider === "MOOV_MONEY"   ? "Moov" :
-      provider === "MTN_MOMO"     ? "MTN" :
-      baseLabel;
-    return `${short} Cabine`;
-  }
+  const short =
+    provider === "ORANGE_MONEY" ? "Orange" :
+    provider === "MOOV_MONEY"   ? "Moov" :
+    provider === "MTN_MOMO"     ? "MTN" :
+    baseLabel;
+  if (category === "CABINE") return `${short} Cabine`;
+  if (category === "PAY") return `${short} Pay`;
   if (category === "WAVE_MARCHAND") return "Wave Marchand";
   if (category === "WAVE_NORMAL") return "Wave";
   return baseLabel;

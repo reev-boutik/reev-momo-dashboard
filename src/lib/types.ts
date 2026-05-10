@@ -9,6 +9,7 @@ export interface AutoCapture {
   device_label: string;
   provider: string;
   type: string;
+  category: string;  // MONEY / CABINE / WAVE_NORMAL / WAVE_MARCHAND
   amount: number | null;
   balance: number | null;
   fee: number | null;
@@ -46,4 +47,32 @@ export const TYPE_DISPLAY: Record<string, string> = {
   BONUS: "Bonus",
   BALANCE_INQUIRY: "Solde",
   UNKNOWN: "Inconnu",
+};
+
+/**
+ * Catégorie d'activité commerciale Reev Boutik.
+ * Cf. MomoParser.kt#detectCategory pour les règles de détection.
+ */
+export const CATEGORY_DISPLAY: Record<string, string> = {
+  MONEY: "Money",
+  CABINE: "Cabine",
+  PAY: "Pay",
+  WAVE_NORMAL: "Wave",
+  WAVE_MARCHAND: "Wave Marchand",
+};
+
+export const CATEGORY_COLOR: Record<string, string> = {
+  MONEY: "#10B981",        // émeraude — opérations MoMo classiques
+  CABINE: "#F59E0B",       // ambre — vente d'airtime/forfait
+  PAY: "#EC4899",          // rose — encaissement marchand (compte séparé)
+  WAVE_NORMAL: "#1DCDFE",  // cyan Wave
+  WAVE_MARCHAND: "#0891B2", // cyan plus foncé — distinction marchand
+};
+
+export const CATEGORY_BG: Record<string, string> = {
+  MONEY: "#D1FAE5",
+  CABINE: "#FEF3C7",
+  PAY: "#FCE7F3",
+  WAVE_NORMAL: "#CFFAFE",
+  WAVE_MARCHAND: "#A5F3FC",
 };
