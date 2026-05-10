@@ -16,24 +16,57 @@ export interface ParsedFields {
   bonus?: number | null;
   reference?: string | null;
   counterparty?: string | null;
+  category?: string;
 }
 
 const NUMBER = "[0-9]+(?:[ .,][0-9]{3})*(?:[.,][0-9]{1,2})?";
 const CURRENCY = "(?:F\\s*CFA|FCFA|XOF|CFA|F\\b)";
 
 const INCOMING_KEYWORDS = [
-  "vous avez reçu", "vous avez recu", "received from",
-  "credit de", "crédit de", "depot de", "dépôt de", "deposit of",
-  "transfert reçu", "transfert recu", "paid you", "payment received",
-  "no fee on your payment", " reçu ", " recu ", " received ", " credited "
+  // FR
+  "vous avez reçu", "vous avez recu",
+  "vous a payé", "vous a paye",
+  "credit de", "crédit de", "credit:", "crédit:",
+  "depot de", "dépôt de",
+  "transfert reçu", "transfert recu",
+  "paiement reçu", "paiement recu",
+  "remboursement",
+  " reçu ", " recu ",
+  // EN
+  "you have received", "you received", "received from",
+  "deposit of", "credit of",
+  "transfer received",
+  "paid you", "payment received",
+  "no fee on your payment",
+  "refund",
+  " received ", " credited "
 ];
 
 const OUTGOING_KEYWORDS = [
-  "vous avez envoye", "vous avez envoyé", "vous avez paye", "vous avez payé",
-  "transfert effectue", "transfert effectué", "you have sent", "sent to",
-  "paiement de", "achat de", "retrait de", "debit de", "débit de",
-  "you sent", " envoye ", " envoyé ", " sent ", " debited ",
-  "le depot vers", "le dépôt vers"
+  // FR
+  "vous avez envoye", "vous avez envoyé",
+  "vous avez paye", "vous avez payé",
+  "vous avez transfere", "vous avez transféré", "vous avez transferé",
+  "vous avez offert",
+  "transfert effectue", "transfert effectué",
+  "transfert de",
+  "achat de",
+  "paiement de", "paiement effectué", "paiement effectue",
+  "retrait de", "retrait à",
+  "effectué un retrait", "effectue un retrait",
+  "fait un retrait",
+  "debit de", "débit de", "débité", "debite",
+  "facture payée", "facture payee",
+  "depot vers", "dépôt vers",
+  "rechargement de", "rechargement pour", "rechargement à",
+  " envoye ", " envoyé ",
+  // EN
+  "you have sent", "you sent", "sent to",
+  "transfer completed", "transfer of",
+  "purchase of", "payment of",
+  "withdrawal", "cashout", "cash out",
+  "bill paid",
+  " sent ", " debited "
 ];
 
 function parseNumber(s: string | undefined | null): number | null {
@@ -72,13 +105,26 @@ function extractAmount(text: string): number | null {
     const m = text.match(p);
     if (m) return parseNumber(m[1]);
   }
+  // Fallback Cabine forfait : "Vous avez offert le forfait Plus+ (500) au numéro X"
+  // Le montant nominal du forfait est entre parenthèses, sans devise après.
+  const forfaitMatch = text.match(/forfait[^()]{1,60}\(\s*(\d+)\s*\)/i);
+  if (forfaitMatch) return parseNumber(forfaitMatch[1]);
   return null;
 }
 
 function extractBalance(text: string): number | null {
   const patterns = [
-    new RegExp(`(?:nouveau\\s+solde|new\\s+balance)(?:\\s+[A-Za-z]{1,12}){0,3}\\s+est\\s+(?:de\\s+|à\\s+|a\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
+    // "Votre [nouveau] solde [Moov money/OM/etc] est [de] X FCFA" — couvre
+    // "Votre nouveau solde Moov money est de 19 900 FCFA" et autres variantes
+    new RegExp(`(?:votre\\s+)?(?:nouveau\\s+)?solde(?:\\s+[A-Za-z]{1,12}){0,3}\\s+est\\s+(?:de\\s+|à\\s+|a\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
+    // "Nouveau solde: 12000 F" / "Solde: 12000 F"
     new RegExp(`(?:nouveau\\s+solde|new\\s+balance|solde|balance)\\s*[:=]?\\s*(${NUMBER})\\s*${CURRENCY}`, "i"),
+    // "Votre solde EVD actuel est de X Fcfa" — Moov Cabine 110
+    new RegExp(`(?:votre\\s+)?solde\\s+evd(?:\\s+actuel)?\\s+est\\s+(?:de\\s+|à\\s+|a\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
+    // "Votre solde actuel est X Fcfa" — Moov Cabine 110
+    new RegExp(`(?:votre\\s+)?solde\\s+actuel\\s+est\\s+(?:de\\s+|à\\s+|a\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
+    // FALLBACK : "Nouveau solde : 87740" sans devise (Moov Cabine sender 207)
+    new RegExp(`(?:nouveau\\s+solde|new\\s+balance)\\s*[:=]\\s*(${NUMBER})`, "i"),
   ];
   for (const p of patterns) {
     const m = text.match(p);
@@ -152,11 +198,73 @@ function extractCounterparty(text: string): string | null {
 }
 
 /**
+ * Détecte la catégorie d'activité commerciale (MONEY / CABINE / WAVE_NORMAL /
+ * WAVE_MARCHAND). Cascade en 6 étapes — premier match gagne.
+ *
+ * Doit rester synchronisé avec MomoParser.kt#detectCategory.
+ *
+ * @param rawText texte brut du SMS / notif
+ * @param packageName package Android source (ex. "com.wave.business")
+ * @param title expéditeur / titre de notif (ex. "207")
+ * @param provider provider résolu si déjà connu (sinon laisser undefined)
+ */
+export function detectCategory(
+  rawText: string,
+  packageName?: string | null,
+  title?: string | null,
+  provider?: string | null
+): string {
+  const pkgLower = (packageName ?? "").toLowerCase();
+  const lower = (rawText ?? "").toLowerCase();
+  const isWaveProvider = provider === "WAVE";
+
+  // 1. Wave Business par package
+  if (pkgLower === "com.wave.business") return "WAVE_MARCHAND";
+
+  // 2. Wave Business par signature SMS (numéro masqué)
+  if (isWaveProvider && /\(\d{1,4}\*+\d{1,4}\)/.test(rawText ?? "")) {
+    return "WAVE_MARCHAND";
+  }
+
+  // 3. Sender 207 — Orange Cabine
+  const senderNum = (title ?? "").replace(/[^0-9]/g, "");
+  if (senderNum === "207") return "CABINE";
+
+  // 4. Mots-clés Cabine
+  const cabineKeywords = [
+    "rechargement de", "rechargement pour", "rechargement à",
+    "transfert d'unités", "transfert d'unites", "transfert unites", "transfert unités",
+    "transfer of units", "transfer of airtime",
+    "transfert de credit", "transfert de crédit",
+    "de credit vers", "de crédit vers",
+    "transfere de credit", "transferé de credit", "transféré de credit",
+    "offert le forfait", "offert un forfait",
+    "solde evd",
+  ];
+  if (cabineKeywords.some(k => lower.includes(k))) return "CABINE";
+
+  // 4b. Patterns forfait Orange
+  if (/mix\s*\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
+  if (/\bpass\s+\w+(?:\s+\w+)?\s+\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
+
+  // 5. Wave Personal
+  if (isWaveProvider) return "WAVE_NORMAL";
+
+  // 6. Défaut
+  return "MONEY";
+}
+
+/**
  * Re-parse le raw_text d'une transaction et retourne UNIQUEMENT les champs
  * non vides détectés. À fusionner avec la transaction existante côté caller :
  * `{...transaction, ...parseFields(raw)}` — ça écrase seulement les champs détectés.
  */
-export function parseFields(rawText: string): ParsedFields {
+export function parseFields(
+  rawText: string,
+  packageName?: string | null,
+  title?: string | null,
+  provider?: string | null
+): ParsedFields {
   if (!rawText || rawText.trim().length === 0) return {};
   const out: ParsedFields = {};
 
@@ -177,6 +285,8 @@ export function parseFields(rawText: string): ParsedFields {
 
   const counterparty = extractCounterparty(rawText);
   if (counterparty) out.counterparty = counterparty;
+
+  out.category = detectCategory(rawText, packageName, title, provider);
 
   return out;
 }
