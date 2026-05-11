@@ -6,6 +6,17 @@
  *
  * IMPORTANT : ce parser doit rester synchronisé avec le Kotlin. Si tu améliores
  * le Kotlin, porte les changements ici aussi.
+ *
+ * ## Évolution 2026-05-11 (Orange Pay fix)
+ *
+ *  - Retrait de la règle `Reference PP\d → PAY` (faux positifs sur transferts
+ *    P2P classiques).
+ *  - Ajout d'un paramètre optionnel `isOrangePayDevice` à `detectCategory` et
+ *    `parseFields` pour la distinction device-based (Orange Pay marchand).
+ *  - Ajout de blacklist "tentez de gagner", "bonne nouvelle" (pubs OM saisonnières).
+ *  - Ajout de la détection des SMS de consultation de solde (multi-soldes
+ *    USSD response, Moov Money type), classés BALANCE_INQUIRY au lieu de
+ *    transaction.
  */
 
 export interface ParsedFields {
@@ -69,6 +80,19 @@ const OUTGOING_KEYWORDS = [
   " sent ", " debited "
 ];
 
+/**
+ * Marqueurs de SMS de consultation de solde (USSD response).
+ * Cohérent avec BALANCE_INQUIRY_MARKERS côté Kotlin.
+ */
+const BALANCE_INQUIRY_MARKERS = [
+  "le solde de votre compte principal",
+  "le solde de votre compte retrait",
+  "le solde de votre compte commission",
+  "votre solde est de ",
+  "votre solde actuel est ",
+  "votre solde était de", "votre solde etait de"
+];
+
 function parseNumber(s: string | undefined | null): number | null {
   if (!s) return null;
   // "12 345,67" → 12345.67  / "12,345.67" → 12345.67 / "1.530" → 1530 (FR thousands)
@@ -89,6 +113,13 @@ function parseNumber(s: string | undefined | null): number | null {
 
 function detectType(text: string): string {
   const lower = text.toLowerCase();
+  // Si SMS de consultation de solde sans verbe d'action → BALANCE_INQUIRY
+  const hasInquiryMarker = BALANCE_INQUIRY_MARKERS.some(m => lower.includes(m));
+  if (hasInquiryMarker) {
+    const hasAction = INCOMING_KEYWORDS.some(k => lower.includes(k))
+                   || OUTGOING_KEYWORDS.some(k => lower.includes(k));
+    if (!hasAction) return "BALANCE_INQUIRY";
+  }
   for (const k of OUTGOING_KEYWORDS) if (lower.includes(k)) return "OUTGOING";
   for (const k of INCOMING_KEYWORDS) if (lower.includes(k)) return "INCOMING";
   return "UNKNOWN";
@@ -198,53 +229,58 @@ function extractCounterparty(text: string): string | null {
 }
 
 /**
- * Détecte la catégorie d'activité commerciale (MONEY / CABINE / WAVE_NORMAL /
- * WAVE_MARCHAND). Cascade en 6 étapes — premier match gagne.
+ * Détecte la catégorie d'activité commerciale (MONEY / CABINE / PAY /
+ * WAVE_NORMAL / WAVE_MARCHAND). Cascade — premier match gagne.
  *
  * Doit rester synchronisé avec MomoParser.kt#detectCategory.
+ *
+ * ## Ordre des règles (important — Cabine AVANT Pay)
+ *
+ *  1. Wave Marchand (package ou signature SMS masquée)
+ *  2. Cabine (sender 207, mots-clés airtime/forfait, patterns Mix/Pass)
+ *  3. PAY explicite (momopay, "encaissement marchand")
+ *  4. PAY par flag device (isOrangePayDevice + provider Orange)
+ *  5. Wave Personal
+ *  6. MONEY (défaut)
+ *
+ * ## Évolution 2026-05-11
+ *
+ * Suppression de la règle `Reference PP\d → PAY` (faux positifs). Le device
+ * recevant le SMS est désormais le seul signal fiable pour Pay (cf.
+ * isOrangePayDevice).
  *
  * @param rawText texte brut du SMS / notif
  * @param packageName package Android source (ex. "com.wave.business")
  * @param title expéditeur / titre de notif (ex. "207")
- * @param provider provider résolu si déjà connu (sinon laisser undefined)
+ * @param provider provider résolu si déjà connu
+ * @param isOrangePayDevice si true, tous les SMS Orange (hors Cabine)
+ *        sont classés PAY. À passer en se basant sur le device_id du SMS
+ *        (table device_settings côté Reev Guard, à venir).
  */
 export function detectCategory(
   rawText: string,
   packageName?: string | null,
   title?: string | null,
-  provider?: string | null
+  provider?: string | null,
+  isOrangePayDevice?: boolean
 ): string {
   const pkgLower = (packageName ?? "").toLowerCase();
   const lower = (rawText ?? "").toLowerCase();
   const isWaveProvider = provider === "WAVE";
+  const isOrangeProvider = provider === "ORANGE_MONEY";
 
   // 1. Wave Business par package
   if (pkgLower === "com.wave.business") return "WAVE_MARCHAND";
 
-  // 2. Wave Business par signature SMS (numéro masqué)
+  // 1b. Wave Business par signature SMS (numéro masqué)
   if (isWaveProvider && /\(\d{1,4}\*+\d{1,4}\)/.test(rawText ?? "")) {
     return "WAVE_MARCHAND";
   }
 
-  // 3. Compte Pay (encaissement marchand) — détection par marqueur fort
-  // dans le corps. Doit passer AVANT les checks Cabine pour qu'un SMS
-  // Orange Pay (qui mentionne "transfert") ne soit pas mal classé.
-  //  - Orange Pay : "Reference PPyymmdd.HHMM.IDXXXXX" (préfixe PP).
-  //  - MTN MoMoPay : marqueur "momopay" (à confirmer avec samples).
-  //  - Moov Pay   : marqueurs à confirmer.
-  if (/\breference\s+pp\d/i.test(rawText ?? "")) return "PAY";
-  if (lower.includes("momopay")) return "PAY";
-  if (
-    lower.includes("encaissement marchand") ||
-    lower.includes("paiement marchand reçu") ||
-    lower.includes("paiement marchand recu")
-  ) return "PAY";
-
-  // 4. Sender 207 — Orange Cabine
+  // 2. Cabine — checké AVANT Pay pour priorité
   const senderNum = (title ?? "").replace(/[^0-9]/g, "");
   if (senderNum === "207") return "CABINE";
 
-  // 5. Mots-clés Cabine
   const cabineKeywords = [
     "rechargement de", "rechargement pour", "rechargement à",
     "transfert d'unités", "transfert d'unites", "transfert unites", "transfert unités",
@@ -256,15 +292,25 @@ export function detectCategory(
     "solde evd",
   ];
   if (cabineKeywords.some(k => lower.includes(k))) return "CABINE";
-
-  // 5b. Patterns forfait Orange
   if (/mix\s*\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
   if (/\bpass\s+\w+(?:\s+\w+)?\s+\d+\s*f\b/i.test(rawText ?? "")) return "CABINE";
 
-  // 6. Wave Personal
+  // 3. PAY explicite (multi-opérateurs)
+  if (lower.includes("momopay")) return "PAY";
+  if (
+    lower.includes("encaissement marchand") ||
+    lower.includes("paiement marchand reçu") ||
+    lower.includes("paiement marchand recu")
+  ) return "PAY";
+
+  // 4. PAY par flag device (Orange Pay marchand)
+  //    Ancienne règle `Reference PP\d` supprimée — faux positifs sur P2P.
+  if (isOrangePayDevice && isOrangeProvider) return "PAY";
+
+  // 5. Wave Personal
   if (isWaveProvider) return "WAVE_NORMAL";
 
-  // 7. Défaut
+  // 6. Défaut
   return "MONEY";
 }
 
@@ -272,12 +318,17 @@ export function detectCategory(
  * Re-parse le raw_text d'une transaction et retourne UNIQUEMENT les champs
  * non vides détectés. À fusionner avec la transaction existante côté caller :
  * `{...transaction, ...parseFields(raw)}` — ça écrase seulement les champs détectés.
+ *
+ * @param isOrangePayDevice si true, ajuste la catégorisation Pay vs Money
+ *        pour ce raw_text. Doit être passé en se basant sur le device qui a
+ *        capturé ce SMS (à venir via Reev Guard / device_settings).
  */
 export function parseFields(
   rawText: string,
   packageName?: string | null,
   title?: string | null,
-  provider?: string | null
+  provider?: string | null,
+  isOrangePayDevice?: boolean
 ): ParsedFields {
   if (!rawText || rawText.trim().length === 0) return {};
   const out: ParsedFields = {};
@@ -285,7 +336,8 @@ export function parseFields(
   const type = detectType(rawText);
   if (type !== "UNKNOWN") out.type = type;
 
-  const amount = extractAmount(rawText);
+  // Pour un SMS de consultation, pas de montant principal
+  const amount = type === "BALANCE_INQUIRY" ? null : extractAmount(rawText);
   if (amount !== null) out.amount = amount;
 
   const balance = extractBalance(rawText);
@@ -300,7 +352,7 @@ export function parseFields(
   const counterparty = extractCounterparty(rawText);
   if (counterparty) out.counterparty = counterparty;
 
-  out.category = detectCategory(rawText, packageName, title, provider);
+  out.category = detectCategory(rawText, packageName, title, provider, isOrangePayDevice);
 
   return out;
 }
