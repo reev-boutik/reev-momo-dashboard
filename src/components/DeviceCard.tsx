@@ -193,6 +193,18 @@ export default function DeviceCard({ device, onCommandSent }: Props) {
           tooltip="Re-essaie de parser les SMS rejetés avec le parser actuel"
         />
         <ActionButton
+          label="📥 Importer SMS"
+          onClick={() =>
+            trigger(
+              "import_sms",
+              undefined,
+              `Importer TOUS les SMS de la boîte Android de ${device.device_label} ? Utile pour repeupler après un Vider DB locale, sans toucher au téléphone.`
+            )
+          }
+          busy={busy === "import_sms"}
+          tooltip="Lance un import complet depuis la boîte SMS Android + resync vers Supabase"
+        />
+        <ActionButton
           label={`📡 Orange Pay : ${device.is_orange_pay_device ? "OUI" : "non"}`}
           onClick={() =>
             trigger(
