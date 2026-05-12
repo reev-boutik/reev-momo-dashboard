@@ -205,6 +205,18 @@ export default function DeviceCard({ device, onCommandSent }: Props) {
           tooltip="Lance un import complet depuis la boîte SMS Android + resync vers Supabase"
         />
         <ActionButton
+          label="🙈 Masquer notif"
+          onClick={() => trigger("set_notification_visibility", { hidden: true })}
+          busy={busy === "set_notification_visibility"}
+          tooltip="Réduit la notification permanente Reev Guard au strict minimum (juste 'RB' sans texte)"
+        />
+        <ActionButton
+          label="👁️ Afficher notif"
+          onClick={() => trigger("set_notification_visibility", { hidden: false })}
+          busy={busy === "set_notification_visibility"}
+          tooltip="Restaure le texte complet de la notification permanente Reev Guard"
+        />
+        <ActionButton
           label={`📡 Orange Pay : ${device.is_orange_pay_device ? "OUI" : "non"}`}
           onClick={() =>
             trigger(
