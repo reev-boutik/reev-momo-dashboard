@@ -12,6 +12,7 @@ import Reports from "./pages/Reports";
 import AllSms from "./pages/AllSms";
 import Install from "./pages/Install";
 import ReparseAdmin from "./pages/ReparseAdmin";
+import PilotagePage from "./pages/PilotagePage";
 import BalanceBar from "./components/BalanceBar";
 
 export default function App() {
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/reconciliation" element={<Reconciliation />} />
           <Route path="/rapports" element={<Reports />} />
           <Route path="/sms" element={<AllSms />} />
+          <Route path="/pilotage" element={<PilotagePage />} />
           <Route path="/admin/reparse" element={<ReparseAdmin />} />
           <Route path="/install" element={<Install />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -74,6 +76,7 @@ function Header({ email }: { email: string }) {
     { to: "/reconciliation", label: "Réconciliation" },
     { to: "/rapports", label: "Rapports" },
     { to: "/sms", label: "Tous les SMS" },
+    { to: "/pilotage", label: "Pilotage" },
     { to: "/install", label: "Installer l'app" },
   ];
 
