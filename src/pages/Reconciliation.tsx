@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCaptures } from "../hooks/useCaptures";
 import { usePeriod } from "../hooks/usePeriod";
 import PeriodFilter from "../components/PeriodFilter";
@@ -18,15 +18,19 @@ interface ChainedRow extends AutoCapture {
 }
 
 /**
- * Chaîne les soldes par (caisse, opérateur).
- * Écart = solde réel SMS − solde calculé (précédent + montant signé − frais).
- *   +écart  → surplus (réel > prévu)
- *   −écart  → manque  (réel < prévu)
- * Les lignes sans solde réel (ex. bonus de volume Orange, balance=null) font
- * AVANCER la chaîne via le solde calculé, pour ne pas créer de faux écart sur
- * la transaction suivante.
+ * Chaîne les soldes. Écart = solde réel SMS − solde calculé (précédent + montant
+ * signé − frais). +écart = surplus, −écart = manque.
+ *
+ * `mergeAccount` : si vrai, on chaîne par OPÉRATEUR uniquement (on ignore le
+ * device). Sert au compte « Orange Money + Bonus » : les transactions Orange
+ * Money (téléphone money) et les bonus de volume (téléphone bonus dédié) portent
+ * le même `provider` ORANGE_MONEY et appartiennent au MÊME compte réel, donc ils
+ * doivent former une seule chaîne même s'ils viennent de deux téléphones.
+ *
+ * Les lignes sans solde réel (bonus, balance=null) font avancer la chaîne via le
+ * solde calculé, pour ne pas créer de faux écart sur la transaction suivante.
  */
-function buildChain(rows: AutoCapture[]): ChainedRow[] {
+function buildChain(rows: AutoCapture[], mergeAccount = false): ChainedRow[] {
   const sorted = [...rows].sort((a, b) =>
     a.sms_timestamp.localeCompare(b.sms_timestamp)
   );
@@ -34,7 +38,7 @@ function buildChain(rows: AutoCapture[]): ChainedRow[] {
   const lastBalance = new Map<string, number | null>();
 
   for (const r of sorted) {
-    const key = `${r.device_id}|${r.provider}`;
+    const key = mergeAccount ? r.provider : `${r.device_id}|${r.provider}`;
     const prev = lastBalance.has(key) ? lastBalance.get(key)! : null;
 
     let signed: number | null = null;
@@ -54,16 +58,22 @@ function buildChain(rows: AutoCapture[]): ChainedRow[] {
   return out.reverse();
 }
 
+type Mode = "device" | "orange";
+
 export default function Reconciliation() {
   const period = usePeriod("day");
   const { data, loading, error } = useCaptures({
     since: period.range.since,
     until: period.range.until,
-    limit: 1_000_000, // tout charger (la chaîne a besoin de toutes les lignes)
+    limit: 1_000_000,
     realtime: false,
   });
+
+  const [mode, setMode] = useState<Mode>("device");
   const [device, setDevice] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
+  const [moneyDevice, setMoneyDevice] = useState<string>("");
+  const [bonusDevice, setBonusDevice] = useState<string>("");
   const [onlyDelta, setOnlyDelta] = useState<boolean>(false);
 
   const devices = useMemo(() => {
@@ -72,17 +82,53 @@ export default function Reconciliation() {
     return Array.from(set.entries());
   }, [data]);
 
-  const chained = useMemo(() => buildChain(data), [data]);
+  // Détection auto : téléphone qui a le plus de transactions Orange Money
+  // (hors bonus) = money ; téléphone qui a le plus de bonus = bonus.
+  const orangeGuess = useMemo(() => {
+    const money = new Map<string, number>();
+    const bonus = new Map<string, number>();
+    for (const r of data) {
+      if (r.provider !== "ORANGE_MONEY") continue;
+      if (r.type === "BONUS") bonus.set(r.device_id, (bonus.get(r.device_id) ?? 0) + 1);
+      else money.set(r.device_id, (money.get(r.device_id) ?? 0) + 1);
+    }
+    const top = (m: Map<string, number>) =>
+      [...m.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+    return { money: top(money), bonus: top(bonus) };
+  }, [data]);
+
+  // Pré-remplit les deux téléphones la première fois
+  useEffect(() => {
+    if (!moneyDevice && orangeGuess.money) setMoneyDevice(orangeGuess.money);
+    if (!bonusDevice && orangeGuess.bonus) setBonusDevice(orangeGuess.bonus);
+  }, [orangeGuess, moneyDevice, bonusDevice]);
+
+  // Jeu de lignes selon le mode
+  const sourceRows = useMemo(() => {
+    if (mode !== "orange") return data;
+    return data.filter(
+      (r) =>
+        (r.device_id === moneyDevice && r.provider === "ORANGE_MONEY" && r.type !== "BONUS") ||
+        (r.device_id === bonusDevice && r.type === "BONUS")
+    );
+  }, [data, mode, moneyDevice, bonusDevice]);
+
+  const chained = useMemo(
+    () => buildChain(sourceRows, mode === "orange"),
+    [sourceRows, mode]
+  );
 
   const filtered = useMemo(
     () =>
       chained.filter((r) => {
-        if (device && r.device_id !== device) return false;
-        if (provider && r.provider !== provider) return false;
+        if (mode === "device") {
+          if (device && r.device_id !== device) return false;
+          if (provider && r.provider !== provider) return false;
+        }
         if (onlyDelta && (r.delta == null || Math.abs(r.delta) < 0.5)) return false;
         return true;
       }),
-    [chained, device, provider, onlyDelta]
+    [chained, mode, device, provider, onlyDelta]
   );
 
   const totalDelta = filtered.reduce((s, r) => (r.delta != null ? s + r.delta : s), 0);
@@ -136,46 +182,76 @@ export default function Reconciliation() {
         onCustomUntil={period.setCustomUntil}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <select value={device} onChange={(e) => setDevice(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
-          <option value="">Toutes caisses</option>
-          {devices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </select>
-        <select value={provider} onChange={(e) => setProvider(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
-          <option value="">Tous opérateurs</option>
-          {Object.entries(PROVIDER_DISPLAY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-          <input type="checkbox" checked={onlyDelta} onChange={(e) => setOnlyDelta(e.target.checked)} />
-          Uniquement les écarts
-        </label>
-      </div>
-
-      {/* Raccourci : Orange Money + bonus (sans Wave) */}
+      {/* Choix du mode */}
       <div className="flex flex-wrap gap-2">
         <button
-          onClick={() => setProvider("ORANGE_MONEY")}
+          onClick={() => setMode("device")}
           className={`text-sm rounded-lg px-3 py-1.5 border ${
-            provider === "ORANGE_MONEY"
-              ? "bg-orange-500 border-orange-500 text-white"
-              : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
-          }`}
-        >
-          Orange Money + Bonus
-        </button>
-        <button
-          onClick={() => setProvider("")}
-          className={`text-sm rounded-lg px-3 py-1.5 border ${
-            provider === ""
+            mode === "device"
               ? "bg-slate-700 border-slate-700 text-white"
               : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
           }`}
         >
-          Tous opérateurs
+          Par caisse
+        </button>
+        <button
+          onClick={() => setMode("orange")}
+          className={`text-sm rounded-lg px-3 py-1.5 border ${
+            mode === "orange"
+              ? "bg-orange-500 border-orange-500 text-white"
+              : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+          }`}
+        >
+          Compte Orange Money + Bonus
         </button>
       </div>
+
+      {mode === "device" ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <select value={device} onChange={(e) => setDevice(e.target.value)}
+            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
+            <option value="">Toutes caisses</option>
+            {devices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}
+            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm">
+            <option value="">Tous opérateurs</option>
+            {Object.entries(PROVIDER_DISPLAY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={onlyDelta} onChange={(e) => setOnlyDelta(e.target.checked)} />
+            Uniquement les écarts
+          </label>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="text-sm">
+              <span className="block text-xs text-slate-500 mb-1">Téléphone Orange Money (transactions, hors Wave)</span>
+              <select value={moneyDevice} onChange={(e) => setMoneyDevice(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
+                <option value="">— choisir —</option>
+                {devices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-xs text-slate-500 mb-1">Téléphone Bonus (commissions de volume)</span>
+              <select value={bonusDevice} onChange={(e) => setBonusDevice(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
+                <option value="">— choisir —</option>
+                {devices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 sm:self-end sm:pb-2">
+              <input type="checkbox" checked={onlyDelta} onChange={(e) => setOnlyDelta(e.target.checked)} />
+              Uniquement les écarts
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">
+            Combine les transactions Orange Money du premier téléphone (Wave exclu) et les bonus du second, en une seule chaîne de compte.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <KpiCard title="Lignes affichées" value={filtered.length.toLocaleString("fr-FR")} accent="text-slate-700 dark:text-slate-200" />
