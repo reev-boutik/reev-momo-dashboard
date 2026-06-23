@@ -129,7 +129,7 @@ function extractAmount(text: string): number | null {
   const patterns = [
     new RegExp(`montant\\s*[:=]?\\s*(${NUMBER})\\s*${CURRENCY}`, "i"),
     new RegExp(`for\\s+(${NUMBER})\\s*${CURRENCY}`, "i"),
-    new RegExp(`(?:reçu|recu|received|envoye|envoyé|paid|sent|paiement|transfert|achat|retrait|credit|crédit|debit|débit|depot|dépôt)\\s*(?:de\\s+|from\\s+|of\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
+    new RegExp(`(?:reçu|recu|received|envoye|envoyé|paid|sent|paiement|transfert|achat|purchase|retrait|credit|crédit|debit|débit|depot|dépôt)\\s*(?:de\\s+|from\\s+|of\\s+)?(${NUMBER})\\s*${CURRENCY}`, "i"),
     new RegExp(`(${NUMBER})\\s*${CURRENCY}`, ""),
   ];
   for (const p of patterns) {
@@ -277,6 +277,12 @@ export function detectCategory(
     return "WAVE_MARCHAND";
   }
 
+  // 1c. Wave Business par mention "Business balance" / "solde business"
+  // (SMS Wave Business en anglais : "...Your new Business balance: 11.350F").
+  if (isWaveProvider && /(business balance|solde business)/i.test(rawText ?? "")) {
+    return "WAVE_MARCHAND";
+  }
+
   // 2. Cabine — checké AVANT Pay pour priorité
   const senderNum = (title ?? "").replace(/[^0-9]/g, "");
   if (senderNum === "207") return "CABINE";
@@ -332,6 +338,31 @@ export function parseFields(
 ): ParsedFields {
   if (!rawText || rawText.trim().length === 0) return {};
   const out: ParsedFields = {};
+
+  // Cas spécial prioritaire : commission de volume Orange Money (bonus agent J+1).
+  // "Vous avez recu une commission de 281 FCFA pour le volume des transactions
+  //  du 2026-05-17 de 0720492395" → BONUS (revenu), pas des frais ni INCOMING.
+  // Doit primer sur detectType/extractFee. Synchronisé avec
+  // MomoParser.kt#VOLUME_COMMISSION_REGEX.
+  const volComm = rawText.match(
+    new RegExp(
+      `commission\\s+de\\s+(${NUMBER})\\s*${CURRENCY}\\s+pour\\s+le\\s+volume\\s+des\\s+transactions\\s+du\\s+(\\d{4}-\\d{2}-\\d{2})(?:\\s+de\\s+(\\d{6,}))?`,
+      "i"
+    )
+  );
+  if (volComm) {
+    const amt = parseNumber(volComm[1]);
+    return {
+      type: "BONUS",
+      amount: amt,
+      bonus: amt,
+      balance: null,
+      fee: null,
+      reference: volComm[2],
+      counterparty: volComm[3] || null,
+      category: "MONEY",
+    };
+  }
 
   const type = detectType(rawText);
   if (type !== "UNKNOWN") out.type = type;

@@ -15,16 +15,21 @@ interface ProviderStat {
   provider: string;
   in: number;
   out: number;
+  bonus: number;
   count: number;
+  bonusCount: number;
 }
 
 function computeStats(rows: AutoCapture[]): ProviderStat[] {
   const map = new Map<string, ProviderStat>();
   for (const r of rows) {
     if (r.amount == null) continue;
-    const s = map.get(r.provider) ?? { provider: r.provider, in: 0, out: 0, count: 0 };
+    const s =
+      map.get(r.provider) ??
+      { provider: r.provider, in: 0, out: 0, bonus: 0, count: 0, bonusCount: 0 };
     if (r.type === "INCOMING") s.in += r.amount;
     else if (r.type === "OUTGOING") s.out += r.amount;
+    else if (r.type === "BONUS") { s.bonus += r.amount; s.bonusCount += 1; }
     s.count += 1;
     map.set(r.provider, s);
   }
@@ -50,6 +55,16 @@ export default function Today() {
   const stats = useMemo(() => computeStats(data), [data]);
   const totalIn = stats.reduce((s, p) => s + p.in, 0);
   const totalOut = stats.reduce((s, p) => s + p.out, 0);
+
+  // Bonus de la période (commission de volume Orange, etc.). Détaillés plus bas.
+  const bonusRows = useMemo(
+    () => data.filter((r) => r.type === "BONUS" && r.amount != null),
+    [data]
+  );
+  const totalBonus = useMemo(
+    () => bonusRows.reduce((s, r) => s + (r.amount ?? 0), 0),
+    [bonusRows]
+  );
 
   // Liste à afficher dans "Dernières opérations" : si la période a des données,
   // on prend les 30 premières ; sinon, on retombe sur les 20 dernières globales.
@@ -122,10 +137,65 @@ export default function Today() {
                 <div className="text-sm text-slate-600 dark:text-slate-300 space-y-1">
                   <div>↘ Reçu : {fmtMoney(s.in)}</div>
                   <div>↗ Envoyé : {fmtMoney(s.out)}</div>
+                  {s.bonus > 0 && (
+                    <div className="text-amber-600 dark:text-amber-400">
+                      🎁 Bonus : {fmtMoney(s.bonus)} ({s.bonusCount})
+                    </div>
+                  )}
                   <div className="text-xs text-slate-500">{s.count} opération(s)</div>
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+      )}
+
+      {bonusRows.length > 0 && (
+        <section>
+          <h2 className="text-lg font-medium mb-3">
+            🎁 Bonus — {fmtMoney(totalBonus)} ({bonusRows.length})
+          </h2>
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-900/50">
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2">Date</th>
+                  <th className="px-3 py-2">Opérateur</th>
+                  <th className="px-3 py-2">Caisse</th>
+                  <th className="px-3 py-2 text-right">Montant</th>
+                  <th className="px-3 py-2">Référence</th>
+                  <th className="px-3 py-2">Contrepartie</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
+                {bonusRows.map((r) => (
+                  <tr key={r.id}>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">
+                      {fmtFullDate(r.sms_timestamp)}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full"
+                          style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }}
+                        />
+                        {PROVIDER_DISPLAY[r.provider] ?? r.provider}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.device_label}</td>
+                    <td className="px-3 py-2 text-right font-mono text-amber-600 dark:text-amber-400">
+                      +{fmtMoney(r.amount)}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[160px]" title={r.reference ?? ""}>
+                      {r.reference ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[160px]" title={r.counterparty ?? ""}>
+                      {r.counterparty ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
       )}

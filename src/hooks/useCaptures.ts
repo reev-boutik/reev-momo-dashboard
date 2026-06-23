@@ -39,18 +39,31 @@ export function useCaptures(opts: Options = {}) {
     async function load() {
       setLoading(true);
       setError(null);
-      let q = supa!
-        .from("momo_auto_capture")
-        .select("*")
-        .order("sms_timestamp", { ascending: false })
-        .limit(limit);
-      if (since) q = q.gte("sms_timestamp", since);
-      if (until) q = q.lte("sms_timestamp", until);
-      if (deviceId) q = q.eq("device_id", deviceId);
-      const { data: rows, error: err } = await q;
+      // PostgREST plafonne CHAQUE réponse à `db_max_rows` (1000 par défaut),
+      // quel que soit .limit(). On pagine donc par tranches de 1000 via .range()
+      // jusqu'à atteindre `limit` (ou une page incomplète = fin des données).
+      const PAGE = 1000;
+      const want = limit && limit > 0 ? limit : Number.POSITIVE_INFINITY;
+      const acc: AutoCapture[] = [];
+      let pageErr: string | null = null;
+      for (let from = 0; acc.length < want; from += PAGE) {
+        let q = supa!
+          .from("momo_auto_capture")
+          .select("*")
+          .order("sms_timestamp", { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (since) q = q.gte("sms_timestamp", since);
+        if (until) q = q.lte("sms_timestamp", until);
+        if (deviceId) q = q.eq("device_id", deviceId);
+        const { data: rows, error: err } = await q;
+        if (err) { pageErr = err.message; break; }
+        const batch = (rows ?? []) as AutoCapture[];
+        acc.push(...batch);
+        if (batch.length < PAGE) break; // dernière page atteinte
+      }
       if (cancelled) return;
-      if (err) setError(err.message);
-      else setData((rows ?? []) as AutoCapture[]);
+      if (pageErr) setError(pageErr);
+      else setData(Number.isFinite(want) ? acc.slice(0, want) : acc);
       setLoading(false);
     }
     load();
