@@ -67,7 +67,7 @@ function extractPhone(c: AutoCapture): string | null {
 type SortKey = "sms_timestamp" | "device_label" | "provider" | "amount" | "type";
 type SortDir = "asc" | "desc";
 
-const PAGE_SIZES = [25, 50, 100];
+const PAGE_SIZES: Array<number | "all"> = [5, 10, 25, 50, 100, "all"];
 
 export default function AllSms() {
   const [provider, setProvider] = useState<string>("");
@@ -80,7 +80,7 @@ export default function AllSms() {
   const [sortKey, setSortKey] = useState<SortKey>("sms_timestamp");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState<number>(0);
-  const [pageSize, setPageSize] = useState<number>(50);
+  const [pageSize, setPageSize] = useState<number | "all">(50);
 
   const [rows, setRows] = useState<AutoCapture[]>([]);
   const [total, setTotal] = useState<number>(0);
@@ -122,18 +122,14 @@ export default function AllSms() {
     return () => { cancelled = true; };
   }, []);
 
-  // Chargement paginé côté serveur
+  // Chargement paginé serveur (ou tout, si pageSize = "all")
   useEffect(() => {
     const supa = getSupabase();
     if (!supa) { setError("Configuration Supabase manquante"); setLoading(false); return; }
     let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      let q = supa
-        .from("momo_auto_capture")
-        .select("*", { count: "exact" })
-        .order(sortKey, { ascending: sortDir === "asc" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withFilters = (qb: any) => {
+      let q = qb.order(sortKey, { ascending: sortDir === "asc" });
       if (provider) q = q.eq("provider", provider);
       if (device) q = q.eq("device_id", device);
       if (typeF) q = q.eq("type", typeF);
@@ -145,18 +141,47 @@ export default function AllSms() {
           `raw_text.ilike.%${s}%,counterparty.ilike.%${s}%,reference.ilike.%${s}%,device_label.ilike.%${s}%,title.ilike.%${s}%`
         );
       }
-      const from = page * pageSize;
-      q = q.range(from, from + pageSize - 1);
-      const { data, count, error: err } = await q;
-      if (cancelled) return;
-      if (err) { setError(err.message); setRows([]); setTotal(0); }
-      else { setRows((data ?? []) as AutoCapture[]); setTotal(count ?? 0); }
-      setLoading(false);
+      return q;
+    };
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        if (pageSize === "all") {
+          const PAGE = 1000;
+          const acc: AutoCapture[] = [];
+          for (let from = 0; ; from += PAGE) {
+            const { data, error: err } = await withFilters(
+              supa.from("momo_auto_capture").select("*")
+            ).range(from, from + PAGE - 1);
+            if (err) throw err;
+            const batch = (data ?? []) as AutoCapture[];
+            acc.push(...batch);
+            if (batch.length < PAGE) break;
+          }
+          if (cancelled) return;
+          setRows(acc);
+          setTotal(acc.length);
+        } else {
+          const from = page * pageSize;
+          const { data, count, error: err } = await withFilters(
+            supa.from("momo_auto_capture").select("*", { count: "exact" })
+          ).range(from, from + pageSize - 1);
+          if (cancelled) return;
+          if (err) throw err;
+          setRows((data ?? []) as AutoCapture[]);
+          setTotal(count ?? 0);
+        }
+      } catch (e) {
+        if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setRows([]); setTotal(0); }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [provider, device, typeF, amountMin, amountMax, debouncedSearch, sortKey, sortDir, page, pageSize, reloadTick]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / pageSize));
 
   const enriched = useMemo(
     () => rows.map((c) => ({ row: c, category: categorize(c), phone: extractPhone(c) })),
@@ -311,11 +336,18 @@ export default function AllSms() {
           <div className="flex items-center gap-2 text-slate-500">
             <span>Par page :</span>
             <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
+              value={pageSize === "all" ? "all" : String(pageSize)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPageSize(v === "all" ? "all" : Number(v));
+              }}
               className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1"
             >
-              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+              {PAGE_SIZES.map((n) => (
+                <option key={String(n)} value={n === "all" ? "all" : String(n)}>
+                  {n === "all" ? "Tout" : n}
+                </option>
+              ))}
             </select>
           </div>
           <div className="flex items-center gap-2">

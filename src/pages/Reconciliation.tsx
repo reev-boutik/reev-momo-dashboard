@@ -17,6 +17,15 @@ interface ChainedRow extends AutoCapture {
   delta: number | null;
 }
 
+/**
+ * Chaîne les soldes par (caisse, opérateur).
+ * Écart = solde réel SMS − solde calculé (précédent + montant signé − frais).
+ *   +écart  → surplus (réel > prévu)
+ *   −écart  → manque  (réel < prévu)
+ * Les lignes sans solde réel (ex. bonus de volume Orange, balance=null) font
+ * AVANCER la chaîne via le solde calculé, pour ne pas créer de faux écart sur
+ * la transaction suivante.
+ */
 function buildChain(rows: AutoCapture[]): ChainedRow[] {
   const sorted = [...rows].sort((a, b) =>
     a.sms_timestamp.localeCompare(b.sms_timestamp)
@@ -35,11 +44,12 @@ function buildChain(rows: AutoCapture[]): ChainedRow[] {
     }
     const fee = r.fee ?? 0;
     const expected = prev != null && signed != null ? prev + signed - fee : null;
-    const delta = expected != null && r.balance != null ? expected - r.balance : null;
+    const delta = expected != null && r.balance != null ? r.balance - expected : null;
 
     out.push({ ...r, prevBalance: prev, expectedBalance: expected, delta });
 
     if (r.balance != null) lastBalance.set(key, r.balance);
+    else if (expected != null) lastBalance.set(key, expected); // traverse les bonus
   }
   return out.reverse();
 }
@@ -49,7 +59,8 @@ export default function Reconciliation() {
   const { data, loading, error } = useCaptures({
     since: period.range.since,
     until: period.range.until,
-    limit: 5000,
+    limit: 1_000_000, // tout charger (la chaîne a besoin de toutes les lignes)
+    realtime: false,
   });
   const [device, setDevice] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
@@ -78,6 +89,8 @@ export default function Reconciliation() {
   const countWithDelta = filtered.filter(
     (r) => r.delta != null && Math.abs(r.delta) >= 0.5
   ).length;
+  const bonusRows = filtered.filter((r) => r.type === "BONUS" && r.amount != null);
+  const totalBonus = bonusRows.reduce((s, r) => s + (r.amount ?? 0), 0);
 
   if (loading) return <div className="p-6 text-slate-500">Chargement…</div>;
   if (error) return <div className="p-6 text-red-600">Erreur : {error}</div>;
@@ -89,7 +102,7 @@ export default function Reconciliation() {
           <h1 className="text-2xl font-semibold">Réconciliation</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">
             Chaînage des soldes — {period.range.label}.
-            Écart = solde calculé (précédent + montant − frais) − solde réel SMS.
+            Écart = solde réel SMS − solde calculé (précédent + montant − frais).
           </p>
         </div>
         <ExportButton
@@ -104,7 +117,7 @@ export default function Reconciliation() {
             { key: "prevBalance", label: "Solde précédent" },
             { key: "expectedBalance", label: "Solde calculé" },
             { key: "balance", label: "Solde réel" },
-            { key: "delta", label: "Écart" },
+            { key: "delta", label: "Écart (réel − calculé)" },
           ]}
           filenamePrefix="reconciliation"
           pdfTitle="Réconciliation des soldes"
@@ -140,8 +153,33 @@ export default function Reconciliation() {
         </label>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <KpiCard title="Lignes affichées" value={filtered.length.toString()} accent="text-slate-700 dark:text-slate-200" />
+      {/* Raccourci : Orange Money + bonus (sans Wave) */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => setProvider("ORANGE_MONEY")}
+          className={`text-sm rounded-lg px-3 py-1.5 border ${
+            provider === "ORANGE_MONEY"
+              ? "bg-orange-500 border-orange-500 text-white"
+              : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+          }`}
+        >
+          Orange Money + Bonus
+        </button>
+        <button
+          onClick={() => setProvider("")}
+          className={`text-sm rounded-lg px-3 py-1.5 border ${
+            provider === ""
+              ? "bg-slate-700 border-slate-700 text-white"
+              : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+          }`}
+        >
+          Tous opérateurs
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <KpiCard title="Lignes affichées" value={filtered.length.toLocaleString("fr-FR")} accent="text-slate-700 dark:text-slate-200" />
+        <KpiCard title="Bonus reçus" value={`${fmtMoney(totalBonus)} (${bonusRows.length})`} accent="text-amber-500" />
         <KpiCard title="Avec écart" value={countWithDelta.toString()}
           accent={countWithDelta > 0 ? "text-amber-500" : "text-emerald-500"} />
         <KpiCard title="Somme des écarts" value={fmtMoney(totalDelta)}
@@ -165,10 +203,20 @@ export default function Reconciliation() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
-            {filtered.slice(0, 500).map((r) => {
+            {filtered.map((r) => {
               const hasDelta = r.delta != null && Math.abs(r.delta) >= 0.5;
+              const isBonus = r.type === "BONUS";
               return (
-                <tr key={r.id} className={hasDelta ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
+                <tr
+                  key={r.id}
+                  className={
+                    hasDelta
+                      ? "bg-rose-50 dark:bg-rose-900/20"
+                      : isBonus
+                      ? "bg-amber-50 dark:bg-amber-900/20"
+                      : ""
+                  }
+                >
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">
                     {fmtDate(r.sms_timestamp)} {fmtTime(r.sms_timestamp)}
                   </td>
@@ -179,9 +227,12 @@ export default function Reconciliation() {
                       {PROVIDER_DISPLAY[r.provider] ?? r.provider}
                     </span>
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{TYPE_DISPLAY[r.type] ?? r.type}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {isBonus && <span className="mr-1">🎁</span>}
+                    {TYPE_DISPLAY[r.type] ?? r.type}
+                  </td>
                   <td className={`px-3 py-2 text-right font-mono ${
-                    r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : ""
+                    r.type === "INCOMING" || r.type === "BONUS" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : ""
                   }`}>
                     {r.amount != null ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}` : "—"}
                   </td>
@@ -204,9 +255,6 @@ export default function Reconciliation() {
             )}
           </tbody>
         </table>
-        {filtered.length > 500 && (
-          <div className="p-2 text-xs text-slate-500 text-center">500 premières lignes affichées.</div>
-        )}
       </div>
     </div>
   );
