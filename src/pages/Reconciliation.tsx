@@ -75,6 +75,8 @@ export default function Reconciliation() {
   const [moneyDevice, setMoneyDevice] = useState<string>("");
   const [bonusDevice, setBonusDevice] = useState<string>("");
   const [onlyDelta, setOnlyDelta] = useState<boolean>(false);
+  const [search, setSearch] = useState<string>("");
+  const [openId, setOpenId] = useState<number | null>(null);
 
   const devices = useMemo(() => {
     const set = new Map<string, string>();
@@ -126,9 +128,14 @@ export default function Reconciliation() {
           if (provider && r.provider !== provider) return false;
         }
         if (onlyDelta && (r.delta == null || Math.abs(r.delta) < 0.5)) return false;
+        const s = search.trim().toLowerCase();
+        if (s) {
+          const hay = `${r.raw_text ?? ""} ${r.counterparty ?? ""} ${r.reference ?? ""} ${r.device_label ?? ""}`.toLowerCase();
+          if (!hay.includes(s)) return false;
+        }
         return true;
       }),
-    [chained, mode, device, provider, onlyDelta]
+    [chained, mode, device, provider, onlyDelta, search]
   );
 
   const totalDelta = filtered.reduce((s, r) => (r.delta != null ? s + r.delta : s), 0);
@@ -253,6 +260,14 @@ export default function Reconciliation() {
         </div>
       )}
 
+      <input
+        type="text"
+        placeholder="Rechercher dans le texte des SMS (n°, réf, mot-clé…)"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
+      />
+
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <KpiCard title="Lignes affichées" value={filtered.length.toLocaleString("fr-FR")} accent="text-slate-700 dark:text-slate-200" />
         <KpiCard title="Bonus reçus" value={`${fmtMoney(totalBonus)} (${bonusRows.length})`} accent="text-amber-500" />
@@ -276,13 +291,14 @@ export default function Reconciliation() {
               <th className="px-3 py-2 text-right">Solde calculé</th>
               <th className="px-3 py-2 text-right">Solde réel</th>
               <th className="px-3 py-2 text-right">Écart</th>
+              <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
             {filtered.map((r) => {
               const hasDelta = r.delta != null && Math.abs(r.delta) >= 0.5;
               const isBonus = r.type === "BONUS";
-              return (
+              return [
                 <tr
                   key={r.id}
                   className={
@@ -323,11 +339,39 @@ export default function Reconciliation() {
                   }`}>
                     {r.delta != null ? `${r.delta > 0 ? "+" : ""}${fmtMoney(r.delta)}` : "—"}
                   </td>
-                </tr>
-              );
-            })}
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      onClick={() => setOpenId(openId === r.id ? null : r.id)}
+                      className="text-xs rounded-md border border-slate-300 dark:border-slate-700 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    >
+                      {openId === r.id ? "Masquer" : "SMS"}
+                    </button>
+                  </td>
+                </tr>,
+                openId === r.id ? (
+                  <tr key={`${r.id}-sms`} className="bg-slate-50 dark:bg-slate-900/40">
+                    <td colSpan={11} className="px-3 py-3">
+                      <div className="space-y-2 text-sm">
+                        {r.title && (
+                          <div><span className="text-slate-500">Titre :</span> <strong>{r.title}</strong></div>
+                        )}
+                        <div className="text-slate-700 dark:text-slate-200 whitespace-pre-wrap font-mono text-xs bg-white dark:bg-slate-800 rounded-lg p-3 border border-slate-200 dark:border-slate-700 select-text">
+                          {r.raw_text ?? "—"}
+                        </div>
+                        <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                          {r.reference && <span>Réf : {r.reference}</span>}
+                          {r.counterparty && <span>Contrepartie : {r.counterparty}</span>}
+                          {r.package_name && <span>App : {r.package_name}</span>}
+                          <span>{fmtFullDate(r.sms_timestamp)}</span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null,
+              ];
+            }).flat().filter(Boolean)}
             {filtered.length === 0 && (
-              <tr><td colSpan={10} className="p-4 text-center text-slate-500">Aucune ligne.</td></tr>
+              <tr><td colSpan={11} className="p-4 text-center text-slate-500">Aucune ligne.</td></tr>
             )}
           </tbody>
         </table>
