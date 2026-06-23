@@ -1,7 +1,4 @@
-import { useMemo, useState } from "react";
-import { useCaptures } from "../hooks/useCaptures";
-import { usePeriod } from "../hooks/usePeriod";
-import PeriodFilter from "../components/PeriodFilter";
+import { useEffect, useMemo, useState } from "react";
 import ExportButton from "../components/ExportButton";
 import { fmtMoney, fmtFullDate } from "../lib/format";
 import {
@@ -19,12 +16,13 @@ type SortKey =
   | "type"
   | "amount"
   | "fee"
-  | "total"
   | "balance"
   | "reference"
   | "counterparty";
 
 type SortDir = "asc" | "desc";
+
+const PAGE_SIZES = [25, 50, 100];
 
 /** Total signé d'une transaction = montant signé - frais */
 function rowTotal(r: AutoCapture): number | null {
@@ -35,71 +33,95 @@ function rowTotal(r: AutoCapture): number | null {
 }
 
 export default function History() {
-  const period = usePeriod("day");
-  const { data, loading, error } = useCaptures({
-    since: period.range.since,
-    until: period.range.until,
-    limit: 5000,
-  });
-
   const [provider, setProvider] = useState<string>("");
   const [type, setType] = useState<string>("");
   const [device, setDevice] = useState<string>("");
+  const [amountMin, setAmountMin] = useState<string>("");
+  const [amountMax, setAmountMax] = useState<string>("");
   const [search, setSearch] = useState<string>("");
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("sms_timestamp");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [page, setPage] = useState<number>(0);
+  const [pageSize, setPageSize] = useState<number>(50);
+
+  const [rows, setRows] = useState<AutoCapture[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting] = useState<boolean>(false);
+  const [devices, setDevices] = useState<Array<[string, string]>>([]);
+  const [reloadTick, setReloadTick] = useState<number>(0);
 
-  const devices = useMemo(() => {
-    const set = new Map<string, string>();
-    for (const r of data) set.set(r.device_id, r.device_label || r.device_id);
-    return Array.from(set.entries());
-  }, [data]);
+  // Debounce recherche
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let res = data.filter((r) => {
-      if (provider && r.provider !== provider) return false;
-      if (type && r.type !== type) return false;
-      if (device && r.device_id !== device) return false;
-      if (q) {
-        const hay = [r.raw_text, r.reference, r.counterparty, r.device_label]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!hay.includes(q)) return false;
+  // Retour page 1 quand un filtre change
+  useEffect(() => {
+    setPage(0);
+  }, [provider, type, device, amountMin, amountMax, debouncedSearch, sortKey, sortDir, pageSize]);
+
+  // Liste des caisses
+  useEffect(() => {
+    const supa = getSupabase();
+    if (!supa) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supa
+        .from("momo_auto_capture")
+        .select("device_id, device_label")
+        .order("sms_timestamp", { ascending: false })
+        .limit(1000);
+      if (cancelled || !data) return;
+      const m = new Map<string, string>();
+      for (const r of data as Array<{ device_id: string; device_label: string | null }>) {
+        m.set(r.device_id, r.device_label || r.device_id);
       }
-      return true;
-    });
+      setDevices(Array.from(m.entries()));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-    // Tri
-    res = [...res].sort((a, b) => {
-      let va: any;
-      let vb: any;
-      if (sortKey === "total") {
-        va = rowTotal(a);
-        vb = rowTotal(b);
-      } else {
-        va = (a as any)[sortKey];
-        vb = (b as any)[sortKey];
+  // Chargement paginé serveur
+  useEffect(() => {
+    const supa = getSupabase();
+    if (!supa) { setError("Configuration Supabase manquante"); setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      let q = supa
+        .from("momo_auto_capture")
+        .select("*", { count: "exact" })
+        .order(sortKey, { ascending: sortDir === "asc" });
+      if (provider) q = q.eq("provider", provider);
+      if (type) q = q.eq("type", type);
+      if (device) q = q.eq("device_id", device);
+      if (amountMin !== "" && Number.isFinite(Number(amountMin))) q = q.gte("amount", Number(amountMin));
+      if (amountMax !== "" && Number.isFinite(Number(amountMax))) q = q.lte("amount", Number(amountMax));
+      const s = debouncedSearch.replace(/[,()]/g, " ").trim();
+      if (s) {
+        q = q.or(
+          `raw_text.ilike.%${s}%,counterparty.ilike.%${s}%,reference.ilike.%${s}%,device_label.ilike.%${s}%`
+        );
       }
-      // null en dernier
-      if (va == null && vb == null) return 0;
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      let cmp: number;
-      if (typeof va === "number" && typeof vb === "number") {
-        cmp = va - vb;
-      } else {
-        cmp = String(va).localeCompare(String(vb), "fr", { numeric: true });
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return res;
-  }, [data, provider, type, device, search, sortKey, sortDir]);
+      const from = page * pageSize;
+      q = q.range(from, from + pageSize - 1);
+      const { data, count, error: err } = await q;
+      if (cancelled) return;
+      if (err) { setError(err.message); setRows([]); setTotal(0); }
+      else { setRows((data ?? []) as AutoCapture[]); setTotal(count ?? 0); }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [provider, type, device, amountMin, amountMax, debouncedSearch, sortKey, sortDir, page, pageSize, reloadTick]);
 
-  // Colonnes pour l'export universel (CSV/JSON/XLSX/PDF)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
   const EXPORT_COLS = [
     { key: "sms_timestamp", label: "Date", transform: (v: string) => fmtFullDate(v) },
     { key: "device_label", label: "Caisse" },
@@ -107,27 +129,25 @@ export default function History() {
     { key: "type", label: "Type", transform: (v: string) => TYPE_DISPLAY[v] ?? v },
     { key: "amount", label: "Montant" },
     { key: "fee", label: "Frais" },
-    { key: "total", label: "Total", transform: (_v: any, r: AutoCapture) => rowTotal(r) },
+    { key: "total", label: "Total", transform: (_v: unknown, r: AutoCapture) => rowTotal(r) },
     { key: "balance", label: "Solde" },
     { key: "reference", label: "Référence" },
     { key: "counterparty", label: "Contrepartie" },
   ];
 
   function toggleSort(k: SortKey) {
-    if (sortKey === k) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(k);
-      setSortDir(k === "amount" || k === "balance" ? "desc" : "desc");
-    }
+    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("desc"); }
+  }
+
+  function resetFilters() {
+    setProvider(""); setType(""); setDevice("");
+    setAmountMin(""); setAmountMax(""); setSearch("");
   }
 
   function toggleAll() {
-    if (selected.size === filtered.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(filtered.slice(0, 500).map((r) => r.id)));
-    }
+    if (selected.size === rows.length && rows.length > 0) setSelected(new Set());
+    else setSelected(new Set(rows.map((r) => r.id)));
   }
 
   function toggleOne(id: number) {
@@ -139,36 +159,17 @@ export default function History() {
 
   async function deleteSelected() {
     if (selected.size === 0) return;
-    if (
-      !confirm(
-        `Supprimer ${selected.size} transaction(s) ? Action irréversible.`
-      )
-    )
-      return;
+    if (!confirm(`Supprimer ${selected.size} transaction(s) ? Action irréversible.`)) return;
     const supa = getSupabase();
-    if (!supa) {
-      alert("Supabase non initialisé.");
-      return;
-    }
+    if (!supa) { alert("Supabase non initialisé."); return; }
     setDeleting(true);
     const ids = Array.from(selected);
-    const { error: err } = await supa
-      .from("momo_auto_capture")
-      .delete()
-      .in("id", ids);
+    const { error: err } = await supa.from("momo_auto_capture").delete().in("id", ids);
     setDeleting(false);
-    if (err) {
-      alert(`Erreur suppression : ${err.message}`);
-      return;
-    }
+    if (err) { alert(`Erreur suppression : ${err.message}`); return; }
     setSelected(new Set());
-    // Le realtime ne couvre que les INSERT — on retire localement
-    // pour éviter d'attendre un refresh complet
-    window.location.reload();
+    setReloadTick((t) => t + 1);
   }
-
-  if (loading) return <div className="p-6 text-slate-500">Chargement…</div>;
-  if (error) return <div className="p-6 text-red-600">Erreur : {error}</div>;
 
   return (
     <div className="p-6 space-y-6">
@@ -176,7 +177,7 @@ export default function History() {
         <div>
           <h1 className="text-2xl font-semibold">Historique</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            {filtered.length} sur {data.length} transactions — {period.range.label}
+            {total.toLocaleString("fr-FR")} transactions au total — page {page + 1} / {totalPages}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -189,41 +190,37 @@ export default function History() {
               {deleting ? "Suppression…" : `Supprimer ${selected.size}`}
             </button>
           )}
+          <button
+            onClick={() => setReloadTick((t) => t + 1)}
+            className="text-sm rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-700"
+          >
+            ↻ Rafraîchir
+          </button>
           <ExportButton
-            rows={filtered}
+            rows={rows}
             cols={EXPORT_COLS}
             filenamePrefix="historique"
             pdfTitle="Historique des transactions"
-            pdfSubtitle={`${filtered.length} transaction(s) — ${period.range.label}`}
+            pdfSubtitle={`Page ${page + 1}/${totalPages} — ${total} transaction(s)`}
           />
         </div>
       </header>
 
-      <PeriodFilter
-        value={period.key}
-        onChange={period.setKey}
-        count={period.count}
-        onCountChange={period.setCount}
-        customSince={period.customSince}
-        customUntil={period.customUntil}
-        onCustomSince={period.setCustomSince}
-        onCustomUntil={period.setCustomUntil}
-      />
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Filtres + recherche */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
         <input
           type="text"
           placeholder="Recherche (ref, n° client, texte…)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
+          className="lg:col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
         />
         <select
           value={provider}
           onChange={(e) => setProvider(e.target.value)}
           className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
         >
-          <option value="">Tous opérateurs</option>
+          <option value="">Tous réseaux</option>
           {Object.entries(PROVIDER_DISPLAY).map(([k, v]) => (
             <option key={k} value={k}>{v}</option>
           ))}
@@ -238,6 +235,20 @@ export default function History() {
             <option key={k} value={k}>{v}</option>
           ))}
         </select>
+        <input
+          type="number"
+          placeholder="Montant min"
+          value={amountMin}
+          onChange={(e) => setAmountMin(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
+        />
+        <input
+          type="number"
+          placeholder="Montant max"
+          value={amountMax}
+          onChange={(e) => setAmountMax(e.target.value)}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
+        />
         <select
           value={device}
           onChange={(e) => setDevice(e.target.value)}
@@ -248,112 +259,133 @@ export default function History() {
             <option key={id} value={id}>{label}</option>
           ))}
         </select>
+        <button
+          onClick={resetFilters}
+          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700"
+        >
+          Réinitialiser
+        </button>
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-900/50">
-            <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-              <th className="px-3 py-2 w-8">
-                <input
-                  type="checkbox"
-                  checked={selected.size > 0 && selected.size === filtered.slice(0, 500).length}
-                  onChange={toggleAll}
-                  aria-label="Tout sélectionner"
-                />
-              </th>
-              <SortHeader k="sms_timestamp" label="Date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="device_label" label="Caisse" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="provider" label="Opérateur" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="type" label="Type" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="amount" label="Montant" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="fee" label="Frais" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="total" label="Total" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="balance" label="Solde" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="reference" label="Référence" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-              <SortHeader k="counterparty" label="Contrepartie" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
-            {filtered.slice(0, 500).map((r) => {
-              const isSel = selected.has(r.id);
-              return (
-                <tr key={r.id} className={isSel ? "bg-brand-50 dark:bg-brand-700/20" : ""}>
-                  <td className="px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={isSel}
-                      onChange={() => toggleOne(r.id)}
-                    />
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">
-                    {fmtFullDate(r.sms_timestamp)}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{r.device_label}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full"
-                        style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }}
-                      />
-                      {PROVIDER_DISPLAY[r.provider] ?? r.provider}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{TYPE_DISPLAY[r.type] ?? r.type}</td>
-                  <td className={`px-3 py-2 text-right font-mono ${
-                    r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : ""
-                  }`}>
-                    {r.amount != null ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-amber-600 dark:text-amber-400">
-                    {r.fee && r.fee > 0 ? `−${fmtMoney(r.fee)}` : "—"}
-                  </td>
-                  <td className={`px-3 py-2 text-right font-mono font-semibold ${
-                    rowTotal(r) == null ? "" : (rowTotal(r)! >= 0 ? "text-emerald-600" : "text-rose-600")
-                  }`}>
-                    {(() => {
-                      const t = rowTotal(r);
-                      return t == null ? "—" : `${t >= 0 ? "+" : ""}${fmtMoney(t)}`;
-                    })()}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-400">
-                    {fmtMoney(r.balance)}
-                  </td>
-                  <td className="px-3 py-2 truncate max-w-[180px]" title={r.reference ?? ""}>
-                    {r.reference ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 truncate max-w-[180px]" title={r.counterparty ?? ""}>
-                    {r.counterparty ?? "—"}
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={11} className="p-4 text-center text-slate-500">
-                  Aucun résultat.
-                </td>
+      {error && <div className="text-red-600 text-sm">Erreur : {error}</div>}
+
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-slate-900/50">
+              <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                <th className="px-3 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={rows.length > 0 && selected.size === rows.length}
+                    onChange={toggleAll}
+                    aria-label="Tout sélectionner (page)"
+                  />
+                </th>
+                <SortHeader k="sms_timestamp" label="Date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="device_label" label="Caisse" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="provider" label="Opérateur" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="type" label="Type" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="amount" label="Montant" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="fee" label="Frais" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <th className="px-3 py-2 text-right">Total</th>
+                <SortHeader k="balance" label="Solde" align="right" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="reference" label="Référence" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                <SortHeader k="counterparty" label="Contrepartie" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               </tr>
-            )}
-          </tbody>
-        </table>
-        {filtered.length > 500 && (
-          <div className="p-2 text-xs text-slate-500 text-center">
-            500 premiers résultats affichés. Affine les filtres ou exporte.
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
+              {loading && (
+                <tr><td colSpan={11} className="p-4 text-center text-slate-500">Chargement…</td></tr>
+              )}
+              {!loading && rows.map((r) => {
+                const isSel = selected.has(r.id);
+                const tot = rowTotal(r);
+                return (
+                  <tr key={r.id} className={isSel ? "bg-brand-50 dark:bg-brand-700/20" : ""}>
+                    <td className="px-3 py-2">
+                      <input type="checkbox" checked={isSel} onChange={() => toggleOne(r.id)} />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">
+                      {fmtFullDate(r.sms_timestamp)}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.device_label}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ background: PROVIDER_COLOR[r.provider] ?? "#888" }} />
+                        {PROVIDER_DISPLAY[r.provider] ?? r.provider}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{TYPE_DISPLAY[r.type] ?? r.type}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${
+                      r.type === "INCOMING" ? "text-emerald-500" : r.type === "OUTGOING" ? "text-rose-500" : ""
+                    }`}>
+                      {r.amount != null ? `${r.type === "OUTGOING" ? "−" : "+"}${fmtMoney(r.amount)}` : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-amber-600 dark:text-amber-400">
+                      {r.fee && r.fee > 0 ? `−${fmtMoney(r.fee)}` : "—"}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-mono font-semibold ${
+                      tot == null ? "" : tot >= 0 ? "text-emerald-600" : "text-rose-600"
+                    }`}>
+                      {tot == null ? "—" : `${tot >= 0 ? "+" : ""}${fmtMoney(tot)}`}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-400">
+                      {fmtMoney(r.balance)}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[180px]" title={r.reference ?? ""}>
+                      {r.reference ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[180px]" title={r.counterparty ?? ""}>
+                      {r.counterparty ?? "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!loading && rows.length === 0 && (
+                <tr><td colSpan={11} className="p-4 text-center text-slate-500">Aucun résultat.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-3 border-t border-slate-200 dark:border-slate-700 text-sm">
+          <div className="flex items-center gap-2 text-slate-500">
+            <span>Par page :</span>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1"
+            >
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-700"
+            >
+              ← Précédent
+            </button>
+            <span className="text-slate-500">Page {page + 1} / {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-700"
+            >
+              Suivant →
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 function SortHeader({
-  k,
-  label,
-  align = "left",
-  sortKey,
-  sortDir,
-  onClick,
+  k, label, align = "left", sortKey, sortDir, onClick,
 }: {
   k: SortKey;
   label: string;
